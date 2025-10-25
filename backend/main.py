@@ -154,7 +154,7 @@ class FileSearchEngine:
                             "current_file": str(file_path).replace('/app/host_root', ''),  # Show original local path
                             "files_searched": total_files
                         })
-                    except:
+                    except Exception:  # nosec B110 - Catch all websocket errors
                         break  # WebSocket disconnected
                 
                 total_files += 1
@@ -194,7 +194,7 @@ class FileSearchEngine:
                         "total_matches": total_matches,
                         "duration": end_time - start_time
                     })
-                except:
+                except Exception:  # nosec B110 - Catch all websocket errors
                     pass
             
             return session_id
@@ -240,7 +240,7 @@ class FileSearchEngine:
                     return True
                 except UnicodeDecodeError:
                     return False
-        except:
+        except Exception:  # nosec B110 - Catch all file access errors
             return False
     
     async def _search_text_file(self, file_path: Path, pattern: re.Pattern, session_id: int) -> int:
@@ -503,4 +503,4 @@ if __name__ == "__main__":
     Base.metadata.create_all(bind=engine)
     
     # Run the application
-    uvicorn.run(app, host="0.0.0.0", port=8000)
+    uvicorn.run(app, host="0.0.0.0", port=8000)  # nosec B104 - Binding to all interfaces is required for Docker
