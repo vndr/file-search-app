@@ -63,7 +63,7 @@ jobs:
       - name: Install Node dependencies
         run: |
           cd frontend
-          npm ci
+          npm install
 
       - name: Run JavaScript tests with coverage
         run: |
@@ -197,7 +197,7 @@ jobs:
       - name: Analyze bundle size
         run: |
           cd frontend
-          npm ci
+          npm install
           npm run build
           
           echo "## Frontend Bundle Size Analysis" > bundle-report.md
