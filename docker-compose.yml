@@ -1,0 +1,45 @@
+version: "3.8"
+
+services:
+  backend:
+    build: ./backend
+    ports:
+      - "8000:8000"
+    volumes:
+      - /:/app/host_root:ro # Mount entire file system as read-only
+      - ./backend:/app
+    environment:
+      - DATABASE_URL=postgresql://postgres:password@db:5432/filesearch
+      - SEARCH_ROOT=/app/search_root
+    depends_on:
+      - db
+    restart: unless-stopped
+
+  frontend:
+    build: ./frontend
+    ports:
+      - "3000:3000"
+    volumes:
+      - ./frontend:/app
+      - /app/node_modules
+    environment:
+      - REACT_APP_API_URL=http://localhost:8000
+    depends_on:
+      - backend
+    restart: unless-stopped
+
+  db:
+    image: postgres:15
+    environment:
+      - POSTGRES_DB=filesearch
+      - POSTGRES_USER=postgres
+      - POSTGRES_PASSWORD=password
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./init.sql:/docker-entrypoint-initdb.d/init.sql
+    ports:
+      - "5432:5432"
+    restart: unless-stopped
+
+volumes:
+  postgres_data:
