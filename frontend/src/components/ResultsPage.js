@@ -57,11 +57,6 @@ function ResultsPage() {
     }
   }, [sessionId]);
 
-  useEffect(() => {
-    fetchSessionData();
-    fetchResults();
-  }, [sessionId, fetchSessionData, fetchResults]);
-
   const fetchResults = useCallback(async () => {
     try {
       setLoading(true);
@@ -74,19 +69,6 @@ function ResultsPage() {
       console.error(error);
     }
   }, [sessionId]);
-
-  useEffect(() => {
-    filterResults();
-  }, [results, searchFilter, filterResults]);
-
-  const fetchMatchDetails = async (resultId) => {
-    try {
-      const response = await axios.get(`${API_BASE_URL}/results/${resultId}/matches`);
-      setMatchDetails(response.data);
-    } catch (error) {
-      console.error('Error fetching match details:', error);
-    }
-  };
 
   const filterResults = useCallback(() => {
     if (!searchFilter.trim()) {
@@ -101,6 +83,24 @@ function ResultsPage() {
     }
     setPage(1); // Reset to first page when filtering
   }, [results, searchFilter]);
+
+  useEffect(() => {
+    fetchSessionData();
+    fetchResults();
+  }, [sessionId, fetchSessionData, fetchResults]);
+
+  useEffect(() => {
+    filterResults();
+  }, [results, searchFilter, filterResults]);
+
+  const fetchMatchDetails = async (resultId) => {
+    try {
+      const response = await axios.get(`${API_BASE_URL}/results/${resultId}/matches`);
+      setMatchDetails(response.data);
+    } catch (error) {
+      console.error('Error fetching match details:', error);
+    }
+  };
 
   const handleResultClick = async (result) => {
     setSelectedResult(result);
