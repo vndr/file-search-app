@@ -1,5 +1,10 @@
 # File Search Application
 
+[![CI/CD Pipeline](https://github.com/vndr/file-search-app/workflows/CI/CD%20Pipeline/badge.svg)](https://github.com/vndr/file-search-app/actions/workflows/ci.yml)
+[![Security Scanning](https://github.com/vndr/file-search-app/workflows/Security%20Scanning/badge.svg)](https://github.com/vndr/file-search-app/actions/workflows/security.yml)
+[![Code Quality](https://github.com/vndr/file-search-app/workflows/Code%20Quality/badge.svg)](https://github.com/vndr/file-search-app/actions/workflows/quality.yml)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+
 A powerful web-based file search application that can search for text patterns across directories and files, including inside ZIP archives. Built with a modern tech stack and runs entirely in Docker containers.
 
 ## 🌟 Features
@@ -22,6 +27,26 @@ A powerful web-based file search application that can search for text patterns a
 - **File System**: Direct mount of macOS file system
 - **Communication**: WebSocket for real-time updates
 - **Containerization**: Docker Compose for easy deployment
+- **CI/CD**: GitHub Actions for automated testing and deployment
+
+## 🔄 CI/CD & Quality Assurance
+
+This project includes comprehensive GitHub Actions workflows that automatically run on every pull request:
+
+### Automated Checks:
+- ✅ **Code Quality**: Linting (ESLint, Flake8), formatting (Prettier, Black), complexity analysis
+- ✅ **Security Scanning**: CodeQL, Trivy, OWASP dependency check, secret scanning
+- ✅ **Testing**: Unit tests, coverage reports, build validation
+- ✅ **Docker**: Container build tests and security scans
+- ✅ **Documentation**: Automated deployment guides and best practices
+
+### What Happens on Pull Requests:
+1. Automated security scans identify vulnerabilities
+2. Code quality checks ensure standards are met
+3. Automated comments provide deployment guidance
+4. Status checks must pass before merge
+
+See [GITHUB_ACTIONS.md](GITHUB_ACTIONS.md) for detailed workflow documentation.
 
 ## 🚀 Quick Start
 

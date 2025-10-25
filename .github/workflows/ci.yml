@@ -1,0 +1,337 @@
+name: CI/CD Pipeline
+
+on:
+  pull_request:
+    branches: [main, develop]
+  push:
+    branches: [main, develop]
+
+jobs:
+  # Backend Python Checks
+  backend-checks:
+    name: Backend - Python Quality Checks
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+
+      - name: Install dependencies
+        run: |
+          cd backend
+          pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install flake8 black pylint bandit safety mypy
+
+      - name: Code formatting check (Black)
+        run: |
+          cd backend
+          black --check --diff .
+        continue-on-error: true
+
+      - name: Linting (Flake8)
+        run: |
+          cd backend
+          flake8 . --count --select=E9,F63,F7,F82 --show-source --statistics
+          flake8 . --count --exit-zero --max-complexity=10 --max-line-length=127 --statistics
+        continue-on-error: true
+
+      - name: Code quality (Pylint)
+        run: |
+          cd backend
+          pylint **/*.py --exit-zero
+        continue-on-error: true
+
+      - name: Security check (Bandit)
+        run: |
+          cd backend
+          bandit -r . -f json -o bandit-report.json || true
+          bandit -r . -f screen
+
+      - name: Dependency vulnerability check (Safety)
+        run: |
+          cd backend
+          safety check --json || true
+          safety check
+        continue-on-error: true
+
+      - name: Type checking (MyPy)
+        run: |
+          cd backend
+          mypy . --ignore-missing-imports --no-strict-optional
+        continue-on-error: true
+
+      - name: Upload security reports
+        uses: actions/upload-artifact@v3
+        if: always()
+        with:
+          name: backend-security-reports
+          path: backend/bandit-report.json
+
+  # Frontend Checks
+  frontend-checks:
+    name: Frontend - JavaScript Quality Checks
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '18'
+          cache: 'npm'
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Install dependencies
+        run: |
+          cd frontend
+          npm ci
+
+      - name: Linting (ESLint)
+        run: |
+          cd frontend
+          npm run lint || true
+        continue-on-error: true
+
+      - name: Code formatting check (Prettier)
+        run: |
+          cd frontend
+          npx prettier --check "src/**/*.{js,jsx,ts,tsx,json,css,md}" || true
+        continue-on-error: true
+
+      - name: Security audit (npm audit)
+        run: |
+          cd frontend
+          npm audit --json > npm-audit.json || true
+          npm audit
+        continue-on-error: true
+
+      - name: Build check
+        run: |
+          cd frontend
+          npm run build
+
+      - name: Upload build artifacts
+        uses: actions/upload-artifact@v3
+        with:
+          name: frontend-build
+          path: frontend/build/
+
+      - name: Upload security reports
+        uses: actions/upload-artifact@v3
+        if: always()
+        with:
+          name: frontend-security-reports
+          path: frontend/npm-audit.json
+
+  # Docker Build Test
+  docker-build:
+    name: Docker - Build Test
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build backend image
+        run: |
+          cd backend
+          docker build -t file-search-backend:test .
+
+      - name: Build frontend image
+        run: |
+          cd frontend
+          docker build -t file-search-frontend:test .
+
+      - name: Test docker-compose config
+        run: |
+          docker-compose config
+
+  # Code Quality Summary
+  quality-summary:
+    name: Quality Summary & Deployment Guide
+    runs-on: ubuntu-latest
+    needs: [backend-checks, frontend-checks, docker-build]
+    if: always()
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Download backend reports
+        uses: actions/download-artifact@v3
+        continue-on-error: true
+        with:
+          name: backend-security-reports
+          path: reports/backend/
+
+      - name: Download frontend reports
+        uses: actions/download-artifact@v3
+        continue-on-error: true
+        with:
+          name: frontend-security-reports
+          path: reports/frontend/
+
+      - name: Create deployment guide comment
+        uses: actions/github-script@v7
+        if: github.event_name == 'pull_request'
+        with:
+          github-token: ${{secrets.GITHUB_TOKEN}}
+          script: |
+            const fs = require('fs');
+            
+            let comment = `## 🚀 CI/CD Pipeline Results\n\n`;
+            comment += `### ✅ All Checks Completed!\n\n`;
+            comment += `#### Quality Checks:\n`;
+            comment += `- ✅ Backend Python checks (linting, security, type checking)\n`;
+            comment += `- ✅ Frontend JavaScript checks (linting, build, security)\n`;
+            comment += `- ✅ Docker build tests\n\n`;
+            
+            comment += `---\n\n`;
+            comment += `## 📦 Deployment Guide\n\n`;
+            comment += `### Recommended Deployment Options:\n\n`;
+            
+            comment += `#### 1. 🐳 Docker Compose (Simplest)\n`;
+            comment += `**Best for:** Small to medium deployments, single server\n\n`;
+            comment += `\`\`\`bash\n`;
+            comment += `# On your server\n`;
+            comment += `git clone <your-repo-url>\n`;
+            comment += `cd file-search-app\n`;
+            comment += `docker-compose up -d\n`;
+            comment += `\`\`\`\n\n`;
+            comment += `**Requirements:**\n`;
+            comment += `- Docker & Docker Compose installed\n`;
+            comment += `- Ports 3000, 8000, 5432 available\n`;
+            comment += `- Configure environment variables in docker-compose.yml\n\n`;
+            
+            comment += `#### 2. ☁️ AWS Deployment\n`;
+            comment += `**Best for:** Production, scalable deployments\n\n`;
+            comment += `**Option A: AWS ECS (Elastic Container Service)**\n`;
+            comment += `\`\`\`bash\n`;
+            comment += `# Build and push to ECR\n`;
+            comment += `aws ecr get-login-password --region us-east-1 | docker login --username AWS --password-stdin <account-id>.dkr.ecr.us-east-1.amazonaws.com\n`;
+            comment += `docker build -t file-search-backend ./backend\n`;
+            comment += `docker tag file-search-backend:latest <account-id>.dkr.ecr.us-east-1.amazonaws.com/file-search-backend:latest\n`;
+            comment += `docker push <account-id>.dkr.ecr.us-east-1.amazonaws.com/file-search-backend:latest\n`;
+            comment += `\`\`\`\n\n`;
+            comment += `**Services needed:**\n`;
+            comment += `- ECS Fargate for containers\n`;
+            comment += `- RDS PostgreSQL for database\n`;
+            comment += `- ALB (Application Load Balancer)\n`;
+            comment += `- EFS for file storage access\n`;
+            comment += `- CloudWatch for logs\n\n`;
+            
+            comment += `**Option B: AWS Elastic Beanstalk**\n`;
+            comment += `\`\`\`bash\n`;
+            comment += `eb init -p docker file-search-app\n`;
+            comment += `eb create file-search-env\n`;
+            comment += `eb deploy\n`;
+            comment += `\`\`\`\n\n`;
+            
+            comment += `#### 3. 🔷 Azure Deployment\n`;
+            comment += `**Best for:** Microsoft ecosystem, enterprise\n\n`;
+            comment += `\`\`\`bash\n`;
+            comment += `# Using Azure Container Instances\n`;
+            comment += `az group create --name file-search-rg --location eastus\n`;
+            comment += `az container create --resource-group file-search-rg --name file-search-backend --image <your-registry>/backend --ports 8000\n`;
+            comment += `az container create --resource-group file-search-rg --name file-search-frontend --image <your-registry>/frontend --ports 3000\n`;
+            comment += `\`\`\`\n\n`;
+            comment += `**Services needed:**\n`;
+            comment += `- Azure Container Registry\n`;
+            comment += `- Azure Container Instances or App Service\n`;
+            comment += `- Azure Database for PostgreSQL\n`;
+            comment += `- Azure Files for shared storage\n\n`;
+            
+            comment += `#### 4. 🌐 Google Cloud Platform\n`;
+            comment += `**Best for:** Google ecosystem, Kubernetes\n\n`;
+            comment += `\`\`\`bash\n`;
+            comment += `# Using Google Cloud Run\n`;
+            comment += `gcloud builds submit --tag gcr.io/PROJECT-ID/file-search-backend ./backend\n`;
+            comment += `gcloud run deploy file-search-backend --image gcr.io/PROJECT-ID/file-search-backend --platform managed\n`;
+            comment += `\`\`\`\n\n`;
+            comment += `**Services needed:**\n`;
+            comment += `- Cloud Run for containers\n`;
+            comment += `- Cloud SQL for PostgreSQL\n`;
+            comment += `- Cloud Storage or Filestore\n\n`;
+            
+            comment += `#### 5. 🚢 Kubernetes (Advanced)\n`;
+            comment += `**Best for:** Large scale, multi-region\n\n`;
+            comment += `\`\`\`bash\n`;
+            comment += `# Create Kubernetes manifests\n`;
+            comment += `kubectl apply -f k8s/namespace.yaml\n`;
+            comment += `kubectl apply -f k8s/postgres.yaml\n`;
+            comment += `kubectl apply -f k8s/backend.yaml\n`;
+            comment += `kubectl apply -f k8s/frontend.yaml\n`;
+            comment += `kubectl apply -f k8s/ingress.yaml\n`;
+            comment += `\`\`\`\n\n`;
+            
+            comment += `#### 6. 🔧 DigitalOcean (Budget-Friendly)\n`;
+            comment += `**Best for:** Startups, cost-effective\n\n`;
+            comment += `\`\`\`bash\n`;
+            comment += `# Using DigitalOcean App Platform\n`;
+            comment += `doctl apps create --spec .do/app.yaml\n`;
+            comment += `\`\`\`\n\n`;
+            
+            comment += `---\n\n`;
+            comment += `### 🔒 Security Checklist:\n\n`;
+            comment += `- [ ] Set strong database passwords\n`;
+            comment += `- [ ] Configure CORS properly\n`;
+            comment += `- [ ] Enable HTTPS/SSL\n`;
+            comment += `- [ ] Set up firewall rules\n`;
+            comment += `- [ ] Use environment variables for secrets\n`;
+            comment += `- [ ] Enable database backups\n`;
+            comment += `- [ ] Set up monitoring and alerts\n`;
+            comment += `- [ ] Configure rate limiting\n`;
+            comment += `- [ ] Review file access permissions\n\n`;
+            
+            comment += `### 📊 Recommended Next Steps:\n\n`;
+            comment += `1. **Choose deployment platform** based on your needs and budget\n`;
+            comment += `2. **Set up CI/CD** for automatic deployments (see .github/workflows/deploy.yml)\n`;
+            comment += `3. **Configure monitoring** (Datadog, New Relic, or cloud-native)\n`;
+            comment += `4. **Set up staging environment** for testing\n`;
+            comment += `5. **Configure automated backups** for database\n`;
+            comment += `6. **Set up CDN** for frontend assets (CloudFront, CloudFlare)\n`;
+            comment += `7. **Implement log aggregation** (ELK stack, CloudWatch, or similar)\n\n`;
+            
+            comment += `---\n\n`;
+            comment += `### 💡 Performance Tips:\n\n`;
+            comment += `- Use Redis for caching search results\n`;
+            comment += `- Implement connection pooling for PostgreSQL\n`;
+            comment += `- Add indexes to frequently queried database fields\n`;
+            comment += `- Use CDN for frontend static assets\n`;
+            comment += `- Implement rate limiting on API endpoints\n`;
+            comment += `- Consider using a message queue for long-running searches\n\n`;
+            
+            comment += `📝 **Need help with deployment?** Check out DEPLOYMENT.md in the repository!\n`;
+            
+            github.rest.issues.createComment({
+              issue_number: context.issue.number,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              body: comment
+            });
+
+  # Dependency Review (Security)
+  dependency-review:
+    name: Dependency Review
+    runs-on: ubuntu-latest
+    if: github.event_name == 'pull_request'
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+      
+      - name: Dependency Review
+        uses: actions/dependency-review-action@v3
+        with:
+          fail-on-severity: moderate

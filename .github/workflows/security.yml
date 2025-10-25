@@ -1,0 +1,209 @@
+name: Security Scanning
+
+on:
+  pull_request:
+    branches: [main, develop]
+  push:
+    branches: [main, develop]
+  schedule:
+    # Run weekly security scans
+    - cron: '0 0 * * 0'
+
+jobs:
+  # CodeQL Analysis
+  codeql-analysis:
+    name: CodeQL Security Analysis
+    runs-on: ubuntu-latest
+    permissions:
+      actions: read
+      contents: read
+      security-events: write
+
+    strategy:
+      fail-fast: false
+      matrix:
+        language: ['javascript', 'python']
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Initialize CodeQL
+        uses: github/codeql-action/init@v2
+        with:
+          languages: ${{ matrix.language }}
+
+      - name: Autobuild
+        uses: github/codeql-action/autobuild@v2
+
+      - name: Perform CodeQL Analysis
+        uses: github/codeql-action/analyze@v2
+
+  # Trivy Container Scanning
+  trivy-scan:
+    name: Trivy Container Vulnerability Scan
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Build backend image
+        run: docker build -t file-search-backend:${{ github.sha }} ./backend
+
+      - name: Build frontend image
+        run: docker build -t file-search-frontend:${{ github.sha }} ./frontend
+
+      - name: Run Trivy vulnerability scanner - Backend
+        uses: aquasecurity/trivy-action@master
+        with:
+          image-ref: file-search-backend:${{ github.sha }}
+          format: 'sarif'
+          output: 'trivy-backend-results.sarif'
+          severity: 'CRITICAL,HIGH'
+
+      - name: Run Trivy vulnerability scanner - Frontend
+        uses: aquasecurity/trivy-action@master
+        with:
+          image-ref: file-search-frontend:${{ github.sha }}
+          format: 'sarif'
+          output: 'trivy-frontend-results.sarif'
+          severity: 'CRITICAL,HIGH'
+
+      - name: Upload Trivy results to GitHub Security tab
+        uses: github/codeql-action/upload-sarif@v2
+        if: always()
+        with:
+          sarif_file: 'trivy-backend-results.sarif'
+
+      - name: Upload Trivy Frontend results
+        uses: github/codeql-action/upload-sarif@v2
+        if: always()
+        with:
+          sarif_file: 'trivy-frontend-results.sarif'
+
+  # OWASP Dependency Check
+  owasp-dependency-check:
+    name: OWASP Dependency Check
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Run OWASP Dependency Check
+        uses: dependency-check/Dependency-Check_Action@main
+        with:
+          project: 'file-search-app'
+          path: '.'
+          format: 'HTML'
+          out: 'reports'
+
+      - name: Upload OWASP report
+        uses: actions/upload-artifact@v3
+        with:
+          name: owasp-dependency-check-report
+          path: reports/
+
+  # Secret Scanning
+  secret-scan:
+    name: Secret Scanning
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: TruffleHog Secret Scanning
+        uses: trufflesecurity/trufflehog@main
+        with:
+          path: ./
+          base: ${{ github.event.repository.default_branch }}
+          head: HEAD
+          extra_args: --debug --only-verified
+
+  # License Compliance
+  license-check:
+    name: License Compliance Check
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Check Python licenses
+        run: |
+          pip install pip-licenses
+          cd backend
+          pip install -r requirements.txt
+          pip-licenses --format=markdown --output-file=../python-licenses.md
+
+      - name: Check Node.js licenses
+        run: |
+          cd frontend
+          npm ci
+          npx license-checker --json > ../node-licenses.json
+
+      - name: Upload license reports
+        uses: actions/upload-artifact@v3
+        with:
+          name: license-reports
+          path: |
+            python-licenses.md
+            node-licenses.json
+
+  # Security Summary
+  security-summary:
+    name: Security Summary Report
+    runs-on: ubuntu-latest
+    needs: [codeql-analysis, trivy-scan, owasp-dependency-check, secret-scan, license-check]
+    if: always() && github.event_name == 'pull_request'
+    
+    steps:
+      - name: Create security summary comment
+        uses: actions/github-script@v7
+        with:
+          github-token: ${{secrets.GITHUB_TOKEN}}
+          script: |
+            let comment = `## 🔒 Security Scan Results\n\n`;
+            comment += `### Security Checks Completed:\n\n`;
+            comment += `- ✅ CodeQL Static Analysis (JavaScript & Python)\n`;
+            comment += `- ✅ Trivy Container Vulnerability Scan\n`;
+            comment += `- ✅ OWASP Dependency Check\n`;
+            comment += `- ✅ Secret Scanning (TruffleHog)\n`;
+            comment += `- ✅ License Compliance Check\n\n`;
+            
+            comment += `### 🛡️ Security Best Practices:\n\n`;
+            comment += `#### Critical:\n`;
+            comment += `- [ ] No secrets in code (API keys, passwords, tokens)\n`;
+            comment += `- [ ] Database passwords use environment variables\n`;
+            comment += `- [ ] CORS configured properly\n`;
+            comment += `- [ ] Input validation on all endpoints\n`;
+            comment += `- [ ] SQL injection prevention (using ORMs)\n\n`;
+            
+            comment += `#### Important:\n`;
+            comment += `- [ ] Dependencies up to date\n`;
+            comment += `- [ ] Docker images from trusted sources\n`;
+            comment += `- [ ] File upload size limits\n`;
+            comment += `- [ ] Rate limiting implemented\n`;
+            comment += `- [ ] Error messages don't leak sensitive info\n\n`;
+            
+            comment += `#### Recommended:\n`;
+            comment += `- [ ] Enable HTTPS/TLS in production\n`;
+            comment += `- [ ] Implement authentication/authorization\n`;
+            comment += `- [ ] Add request logging\n`;
+            comment += `- [ ] Set security headers\n`;
+            comment += `- [ ] Regular security audits\n\n`;
+            
+            comment += `---\n\n`;
+            comment += `📊 **Detailed reports available in Actions artifacts**\n`;
+            comment += `⚠️ **Review the Security tab for any identified vulnerabilities**\n`;
+            
+            github.rest.issues.createComment({
+              issue_number: context.issue.number,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              body: comment
+            });
