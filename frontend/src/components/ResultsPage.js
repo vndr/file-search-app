@@ -1,18 +1,15 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import {
   Paper,
   Typography,
   Box,
-  Card,
-  CardContent,
   List,
   ListItem,
   ListItemText,
   Chip,
   TextField,
   InputAdornment,
-  Button,
   Accordion,
   AccordionSummary,
   AccordionDetails,
@@ -50,16 +47,7 @@ function ResultsPage() {
   const [page, setPage] = useState(1);
   const [resultsPerPage] = useState(20);
 
-  useEffect(() => {
-    fetchSessionData();
-    fetchResults();
-  }, [sessionId]);
-
-  useEffect(() => {
-    filterResults();
-  }, [results, searchFilter]);
-
-  const fetchSessionData = async () => {
+  const fetchSessionData = useCallback(async () => {
     try {
       const response = await axios.get(`${API_BASE_URL}/sessions/${sessionId}`);
       setSession(response.data);
@@ -67,9 +55,14 @@ function ResultsPage() {
       setError('Error fetching session data');
       console.error(error);
     }
-  };
+  }, [sessionId]);
 
-  const fetchResults = async () => {
+  useEffect(() => {
+    fetchSessionData();
+    fetchResults();
+  }, [sessionId, fetchSessionData, fetchResults]);
+
+  const fetchResults = useCallback(async () => {
     try {
       setLoading(true);
       const response = await axios.get(`${API_BASE_URL}/sessions/${sessionId}/results?limit=1000`);
@@ -80,7 +73,11 @@ function ResultsPage() {
       setLoading(false);
       console.error(error);
     }
-  };
+  }, [sessionId]);
+
+  useEffect(() => {
+    filterResults();
+  }, [results, searchFilter, filterResults]);
 
   const fetchMatchDetails = async (resultId) => {
     try {
@@ -91,7 +88,7 @@ function ResultsPage() {
     }
   };
 
-  const filterResults = () => {
+  const filterResults = useCallback(() => {
     if (!searchFilter.trim()) {
       setFilteredResults(results);
     } else {
@@ -103,7 +100,7 @@ function ResultsPage() {
       setFilteredResults(filtered);
     }
     setPage(1); // Reset to first page when filtering
-  };
+  }, [results, searchFilter]);
 
   const handleResultClick = async (result) => {
     setSelectedResult(result);

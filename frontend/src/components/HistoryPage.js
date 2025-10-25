@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
 import {
   Paper,
@@ -39,15 +39,7 @@ function HistoryPage() {
   const [page, setPage] = useState(0);
   const [rowsPerPage, setRowsPerPage] = useState(10);
 
-  useEffect(() => {
-    fetchSessions();
-  }, []);
-
-  useEffect(() => {
-    filterSessions();
-  }, [sessions, searchFilter]);
-
-  const fetchSessions = async () => {
+  const fetchSessions = useCallback(async () => {
     try {
       setLoading(true);
       const response = await axios.get(`${API_BASE_URL}/sessions`);
@@ -58,9 +50,13 @@ function HistoryPage() {
       setLoading(false);
       console.error(error);
     }
-  };
+  }, []);
 
-  const filterSessions = () => {
+  useEffect(() => {
+    fetchSessions();
+  }, [fetchSessions]);
+
+  const filterSessions = useCallback(() => {
     if (!searchFilter.trim()) {
       setFilteredSessions(sessions);
     } else {
@@ -71,7 +67,11 @@ function HistoryPage() {
       setFilteredSessions(filtered);
     }
     setPage(0); // Reset to first page when filtering
-  };
+  }, [sessions, searchFilter]);
+
+  useEffect(() => {
+    filterSessions();
+  }, [sessions, searchFilter, filterSessions]);
 
   const deleteSession = async (sessionId) => {
     if (window.confirm('Are you sure you want to delete this search session?')) {
