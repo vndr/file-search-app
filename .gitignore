@@ -156,7 +156,7 @@ dist
 
 # Gatsby files
 .cache/
-public
+# public - DO NOT exclude this for React projects
 
 # Serverless directories
 .serverless/
