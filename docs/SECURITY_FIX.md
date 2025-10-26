@@ -37,52 +37,64 @@ User-controlled paths were being resolved AFTER validation, which could allow pa
 def validate_and_resolve_path(user_path: str, base_path: Path) -> Path:
     """
     Securely validate and resolve a user-provided path.
+    Follows OWASP guidelines and CodeQL recommendations.
     
-    Security measures:
-    1. Check for path traversal attempts BEFORE resolving
-    2. Normalize and clean the path
-    3. Resolve to absolute path (handles symlinks)
-    4. Verify resolved path is within base_path using relative_to()
-    5. Raise HTTPException if any check fails
+    Security measures (in order):
+    1. Sanitize input (null bytes, absolute paths)
+    2. Explicit path traversal checks (.., ~)
+    3. Join with base path using os.path.join()
+    4. Normalize with os.path.normpath() BEFORE any resolution
+    5. Prefix check: ensure normalized path starts with base_path
+    6. Resolve and verify symlinks stay within bounds
+    7. Use Path.relative_to() for final validation
     """
-    base_path_resolved = base_path.resolve()
+    # Convert base_path to string for os.path operations
+    base_path_str = str(base_path.resolve())
     
-    # Handle paths that already include the base
-    if user_path.startswith("/app/host_root"):
-        candidate_path = Path(user_path)
-    else:
-        # Remove leading slash and normalize
-        clean_path = user_path.lstrip("/")
-        
-        # Check for path traversal attempts BEFORE joining
-        if ".." in clean_path or "~" in clean_path:
-            raise HTTPException(
-                status_code=400, 
-                detail="Invalid path: path traversal not allowed"
-            )
-        
-        # Join with base path
-        candidate_path = base_path / clean_path
+    # Sanitize: check for null bytes
+    if '\0' in user_path:
+        raise HTTPException(status_code=400, ...)
     
-    # Resolve to absolute path (resolves symlinks too)
+    # Remove leading slash for joining
+    clean_path = user_path.lstrip("/")
+    
+    # Explicit check for ".." in path parts
+    path_parts = clean_path.split(os.sep)
+    if ".." in path_parts or any(".." in part for part in path_parts):
+        raise HTTPException(status_code=400, ...)
+    
+    # Check for tilde expansion
+    if "~" in clean_path:
+        raise HTTPException(status_code=400, ...)
+    
+    # Check for absolute paths
+    if os.path.isabs(clean_path):
+        raise HTTPException(status_code=400, ...)
+    
+    # Join with base path
+    candidate_path_str = os.path.join(base_path_str, clean_path)
+    
+    # CRITICAL: Normalize BEFORE checking (CodeQL recommendation)
+    normalized_path = os.path.normpath(candidate_path_str)
+    
+    # Prefix check on normalized path
+    if not normalized_path.startswith(base_path_str + os.sep) and normalized_path != base_path_str:
+        raise HTTPException(status_code=403, ...)
+    
+    # Convert to Path for additional validation
+    final_path = Path(normalized_path)
+    
+    # Handle symlinks: resolve and verify still within bounds
+    resolved_final = final_path.resolve(strict=False)
+    resolved_base = Path(base_path_str).resolve(strict=False)
+    
+    # Final check with relative_to()
     try:
-        resolved_path = candidate_path.resolve()
-    except (OSError, RuntimeError) as e:
-        raise HTTPException(
-            status_code=400,
-            detail=f"Invalid path: {str(e)}"
-        )
-    
-    # Verify the resolved path is within base_path using relative_to()
-    try:
-        resolved_path.relative_to(base_path_resolved)
+        resolved_final.relative_to(resolved_base)
     except ValueError:
-        raise HTTPException(
-            status_code=403,
-            detail="Access denied: Path outside allowed directory"
-        )
+        raise HTTPException(status_code=403, ...)
     
-    return resolved_path
+    return final_path
 ```
 
 **Updated all path-handling endpoints**:
@@ -129,12 +141,16 @@ full_path = validate_and_resolve_path(dir_path, host_root)
 ```
 
 ### Security Improvements
-1. ✅ Path traversal (`..`) blocked BEFORE resolving
-2. ✅ Tilde expansion (`~`) blocked
-3. ✅ Uses `Path.relative_to()` instead of string comparison (more robust)
-4. ✅ Handles symlinks securely
-5. ✅ Proper error handling with specific error messages
-6. ✅ Centralized validation logic (DRY principle)
+1. ✅ Null byte injection blocked
+2. ✅ Path traversal (`..`) blocked at multiple levels
+3. ✅ Tilde expansion (`~`) blocked
+4. ✅ Absolute path overrides blocked
+5. ✅ **Uses `os.path.normpath()` BEFORE validation (CodeQL recommended pattern)**
+6. ✅ **Prefix check on normalized path (CodeQL GOOD example)**
+7. ✅ Handles symlinks securely with double-validation
+8. ✅ Uses `Path.relative_to()` for final verification
+9. ✅ Proper error handling with specific error messages
+10. ✅ Centralized validation logic (DRY principle)
 
 ---
 

@@ -54,6 +54,7 @@ except ImportError:
 def validate_and_resolve_path(user_path: str, base_path: Path) -> Path:
     """
     Securely validate and resolve a user-provided path.
+    Follows OWASP guidelines for path traversal prevention.
     
     Args:
         user_path: User-provided path string
@@ -65,45 +66,85 @@ def validate_and_resolve_path(user_path: str, base_path: Path) -> Path:
     Raises:
         HTTPException: If path is invalid or outside base_path
     """
-    # Normalize the base path
-    base_path_resolved = base_path.resolve()
+    # Convert base_path to string for os.path operations
+    base_path_str = str(base_path.resolve())
+    
+    # Sanitize user input
+    # Remove any null bytes
+    if '\0' in user_path:
+        raise HTTPException(
+            status_code=400,
+            detail="Invalid path: null bytes not allowed"
+        )
     
     # Handle paths that already include the base
     if user_path.startswith("/app/host_root"):
-        candidate_path = Path(user_path)
+        # Use the path as-is but still validate
+        candidate_path_str = user_path
     else:
-        # Remove leading slash and normalize
+        # Remove leading slash for joining
         clean_path = user_path.lstrip("/")
         
-        # Check for path traversal attempts before joining
-        if ".." in clean_path or "~" in clean_path:
+        # Explicit check for path traversal patterns
+        # Check for .. in any part of the path
+        path_parts = clean_path.split(os.sep)
+        if ".." in path_parts or any(".." in part for part in path_parts):
             raise HTTPException(
-                status_code=400, 
+                status_code=400,
                 detail="Invalid path: path traversal not allowed"
             )
         
-        # Join with base path
-        candidate_path = base_path / clean_path
+        # Check for tilde expansion
+        if "~" in clean_path:
+            raise HTTPException(
+                status_code=400,
+                detail="Invalid path: tilde expansion not allowed"
+            )
+        
+        # Check for absolute paths trying to escape
+        if os.path.isabs(clean_path):
+            raise HTTPException(
+                status_code=400,
+                detail="Invalid path: absolute paths not allowed"
+            )
+        
+        # Join with base path using os.path.join
+        candidate_path_str = os.path.join(base_path_str, clean_path)
     
-    # Resolve to absolute path (this resolves symlinks too)
+    # Normalize the path (resolves .., ., // etc) BEFORE resolving
+    normalized_path = os.path.normpath(candidate_path_str)
+    
+    # Verify normalized path starts with base_path (prefix check)
+    if not normalized_path.startswith(base_path_str + os.sep) and normalized_path != base_path_str:
+        raise HTTPException(
+            status_code=403,
+            detail="Access denied: Path outside allowed directory"
+        )
+    
+    # Convert to Path object for further operations
+    final_path = Path(normalized_path)
+    
+    # Additional check: ensure the path resolves to something within base_path
+    # This handles symlinks
     try:
-        resolved_path = candidate_path.resolve()
+        resolved_final = final_path.resolve(strict=False)
+        resolved_base = Path(base_path_str).resolve(strict=False)
+        
+        # Use relative_to to ensure resolved path is within base
+        try:
+            resolved_final.relative_to(resolved_base)
+        except ValueError:
+            raise HTTPException(
+                status_code=403,
+                detail="Access denied: Resolved path outside allowed directory"
+            )
     except (OSError, RuntimeError) as e:
         raise HTTPException(
             status_code=400,
             detail=f"Invalid path: {str(e)}"
         )
     
-    # Verify the resolved path is within base_path
-    try:
-        resolved_path.relative_to(base_path_resolved)
-    except ValueError:
-        raise HTTPException(
-            status_code=403,
-            detail="Access denied: Path outside allowed directory"
-        )
-    
-    return resolved_path
+    return final_path
 
 
 # Database setup
