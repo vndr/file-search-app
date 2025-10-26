@@ -48,6 +48,7 @@ import ExpandMoreIcon from '@mui/icons-material/ExpandMore';
 import InsertDriveFileIcon from '@mui/icons-material/InsertDriveFile';
 import FileCopyIcon from '@mui/icons-material/FileCopy';
 import StopIcon from '@mui/icons-material/Stop';
+import DownloadIcon from '@mui/icons-material/Download';
 import axios from 'axios';
 import {
   PieChart,
@@ -158,6 +159,44 @@ function AnalyzerPage() {
       // The analyze request will return with partial results
     } catch (error) {
       console.error('Error cancelling analysis:', error);
+    }
+  };
+
+  // Handle CSV export
+  const handleExport = async (exportType) => {
+    try {
+      const response = await axios.post(
+        `${API_URL}/api/export-analysis-csv`,
+        analysisData,
+        {
+          params: { export_type: exportType },
+          responseType: 'blob'
+        }
+      );
+      
+      // Create download link
+      const url = window.URL.createObjectURL(new Blob([response.data]));
+      const link = document.createElement('a');
+      link.href = url;
+      
+      // Get filename from response headers or use default
+      const contentDisposition = response.headers['content-disposition'];
+      let filename = `export_${exportType}_${Date.now()}.csv`;
+      if (contentDisposition) {
+        const filenameMatch = contentDisposition.match(/filename="?(.+)"?/i);
+        if (filenameMatch) {
+          filename = filenameMatch[1];
+        }
+      }
+      
+      link.setAttribute('download', filename);
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      window.URL.revokeObjectURL(url);
+    } catch (error) {
+      console.error('Error exporting CSV:', error);
+      setError('Error exporting data to CSV');
     }
   };
 
@@ -448,12 +487,42 @@ function AnalyzerPage() {
             </Grid>
 
             {/* Tabs for different views */}
-            <Box sx={{ borderBottom: 1, borderColor: 'divider', mb: 2 }}>
-              <Tabs value={activeTab} onChange={(e, v) => setActiveTab(v)}>
+            <Box sx={{ borderBottom: 1, borderColor: 'divider', mb: 2, display: 'flex', alignItems: 'center' }}>
+              <Tabs value={activeTab} onChange={(e, v) => setActiveTab(v)} sx={{ flexGrow: 1 }}>
                 <Tab label="Overview" />
                 <Tab label="All Files" />
                 <Tab label="Duplicates" />
               </Tabs>
+              <Box sx={{ display: 'flex', gap: 1, mr: 2 }}>
+                {activeTab === 1 && (
+                  <Button
+                    size="small"
+                    startIcon={<DownloadIcon />}
+                    onClick={() => handleExport('all_files')}
+                    variant="outlined"
+                  >
+                    Export All Files
+                  </Button>
+                )}
+                {activeTab === 2 && analysisData.duplicates && analysisData.duplicates.length > 0 && (
+                  <Button
+                    size="small"
+                    startIcon={<DownloadIcon />}
+                    onClick={() => handleExport('duplicates')}
+                    variant="outlined"
+                  >
+                    Export Duplicates
+                  </Button>
+                )}
+                <Button
+                  size="small"
+                  startIcon={<DownloadIcon />}
+                  onClick={() => handleExport('file_types')}
+                  variant="outlined"
+                >
+                  Export File Types
+                </Button>
+              </Box>
             </Box>
 
             {/* Tab 0: Overview with Charts */}

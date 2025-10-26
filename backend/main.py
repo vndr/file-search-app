@@ -5,6 +5,8 @@ import zipfile
 import tarfile
 import asyncio
 import mimetypes
+import csv
+import io
 from datetime import datetime
 from pathlib import Path
 from typing import List, Optional, Dict, AsyncGenerator
@@ -12,6 +14,7 @@ from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import StreamingResponse
 from sqlalchemy import create_engine, Column, Integer, String, Text, Boolean, BigInteger, DateTime, ForeignKey
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import sessionmaker, Session, relationship
@@ -1553,6 +1556,107 @@ async def analyze_directory(path: str, find_duplicates: bool = True, max_hash_si
         # Clean up cancellation tracking
         if session_id in analysis_cancellations:
             del analysis_cancellations[session_id]
+
+@app.post("/api/export-analysis-csv")
+async def export_analysis_csv(data: dict, export_type: str = "all_files"):
+    """
+    Export analysis data to CSV format
+    
+    Parameters:
+    - data: The analysis data to export
+    - export_type: Type of export - 'all_files', 'duplicates', or 'file_types'
+    """
+    try:
+        output = io.StringIO()
+        
+        if export_type == "all_files":
+            # Export all files list
+            writer = csv.writer(output)
+            writer.writerow(['File Name', 'Path', 'Size (Bytes)', 'Size (Human)', 'Extension', 'MIME Type', 'Modified Date'])
+            
+            for file_info in data.get('all_files', []):
+                size_bytes = file_info.get('size', 0)
+                # Human readable size
+                if size_bytes == 0:
+                    size_human = '0 Bytes'
+                else:
+                    k = 1024
+                    sizes = ['Bytes', 'KB', 'MB', 'GB', 'TB']
+                    i = int(min(len(sizes) - 1, int((len(str(size_bytes)) - 1) / 3)))
+                    size_human = f"{round(size_bytes / (k ** i), 2)} {sizes[i]}"
+                
+                writer.writerow([
+                    file_info.get('name', ''),
+                    file_info.get('path', ''),
+                    size_bytes,
+                    size_human,
+                    file_info.get('extension', ''),
+                    file_info.get('mime_type', ''),
+                    file_info.get('modified', '')
+                ])
+            
+            filename = f"file_list_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv"
+        
+        elif export_type == "duplicates":
+            # Export duplicate files
+            writer = csv.writer(output)
+            writer.writerow(['Group', 'Duplicate Count', 'File Size (Bytes)', 'Wasted Space (Bytes)', 'File Name', 'File Path'])
+            
+            for idx, dup_group in enumerate(data.get('duplicates', []), 1):
+                for file_info in dup_group.get('files', []):
+                    writer.writerow([
+                        f"Group {idx}",
+                        dup_group.get('count', 0),
+                        dup_group.get('size', 0),
+                        dup_group.get('wasted_space', 0),
+                        file_info.get('name', ''),
+                        file_info.get('path', '')
+                    ])
+            
+            filename = f"duplicates_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv"
+        
+        elif export_type == "file_types":
+            # Export file type statistics
+            writer = csv.writer(output)
+            writer.writerow(['Extension', 'File Count', 'Total Size (Bytes)', 'Total Size (Human)', 'Average Size (Bytes)'])
+            
+            for file_type in data.get('file_types', []):
+                total_size = file_type.get('total_size', 0)
+                # Human readable size
+                if total_size == 0:
+                    size_human = '0 Bytes'
+                else:
+                    k = 1024
+                    sizes = ['Bytes', 'KB', 'MB', 'GB', 'TB']
+                    i = int(min(len(sizes) - 1, int((len(str(total_size)) - 1) / 3)))
+                    size_human = f"{round(total_size / (k ** i), 2)} {sizes[i]}"
+                
+                writer.writerow([
+                    file_type.get('extension', ''),
+                    file_type.get('count', 0),
+                    total_size,
+                    size_human,
+                    file_type.get('average_size', 0)
+                ])
+            
+            filename = f"file_types_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv"
+        
+        else:
+            raise HTTPException(status_code=400, detail="Invalid export type")
+        
+        # Prepare response
+        output.seek(0)
+        return StreamingResponse(
+            iter([output.getvalue()]),
+            media_type="text/csv",
+            headers={"Content-Disposition": f"attachment; filename={filename}"}
+        )
+    
+    except Exception as e:
+        print(f"ERROR exporting CSV: {str(e)}")
+        import traceback
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=f"Error exporting CSV: {str(e)}")
 
 @app.post("/api/cancel-analysis/{session_id}")
 async def cancel_analysis(session_id: str):
