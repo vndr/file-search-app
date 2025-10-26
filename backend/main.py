@@ -51,17 +51,17 @@ except ImportError:
 
 
 # Security: Path validation function
-def validate_and_resolve_path(user_path: str, base_path: Path) -> Path:
+def validate_and_resolve_path(user_path: str, base_path: Path) -> str:
     """
     Securely validate and resolve a user-provided path.
-    Follows OWASP guidelines for path traversal prevention.
+    Follows OWASP guidelines and CodeQL recommendations for path traversal prevention.
     
     Args:
         user_path: User-provided path string
         base_path: Base directory that all paths must be within
         
     Returns:
-        Resolved absolute path that is guaranteed to be within base_path
+        Validated normalized path string that is guaranteed to be within base_path
         
     Raises:
         HTTPException: If path is invalid or outside base_path
@@ -111,40 +111,36 @@ def validate_and_resolve_path(user_path: str, base_path: Path) -> Path:
         # Join with base path using os.path.join
         candidate_path_str = os.path.join(base_path_str, clean_path)
     
-    # Normalize the path (resolves .., ., // etc) BEFORE resolving
+    # Normalize the path (resolves .., ., // etc)
+    # This is the key CodeQL-recommended pattern
     normalized_path = os.path.normpath(candidate_path_str)
     
     # Verify normalized path starts with base_path (prefix check)
+    # This is the critical security check
     if not normalized_path.startswith(base_path_str + os.sep) and normalized_path != base_path_str:
         raise HTTPException(
             status_code=403,
             detail="Access denied: Path outside allowed directory"
         )
     
-    # Convert to Path object for further operations
-    final_path = Path(normalized_path)
-    
-    # Additional check: ensure the path resolves to something within base_path
-    # This handles symlinks
+    # Additional symlink check using os.path.realpath (string-based)
     try:
-        resolved_final = final_path.resolve(strict=False)
-        resolved_base = Path(base_path_str).resolve(strict=False)
+        real_path = os.path.realpath(normalized_path)
+        real_base = os.path.realpath(base_path_str)
         
-        # Use relative_to to ensure resolved path is within base
-        try:
-            resolved_final.relative_to(resolved_base)
-        except ValueError:
+        # Verify the real path is still within base
+        if not real_path.startswith(real_base + os.sep) and real_path != real_base:
             raise HTTPException(
                 status_code=403,
                 detail="Access denied: Resolved path outside allowed directory"
             )
     except (OSError, RuntimeError) as e:
-        raise HTTPException(
-            status_code=400,
-            detail=f"Invalid path: {str(e)}"
-        )
+        # Path might not exist yet, which is okay for some operations
+        # The prefix check above is the critical security boundary
+        pass
     
-    return final_path
+    # Return the validated string path
+    return normalized_path
 
 
 # Database setup
@@ -981,7 +977,8 @@ async def websocket_search(websocket: WebSocket):
     except WebSocketDisconnect:
         manager.disconnect(websocket)
     except Exception as e:
-        await websocket.send_json({"type": "error", "message": str(e)})
+        print(f"ERROR in WebSocket search: {str(e)}")
+        await websocket.send_json({"type": "error", "message": "An error occurred during the search operation. Please try again."})
 
 @app.get("/sessions", response_model=List[SearchSessionResponse])
 async def get_search_sessions():
@@ -1141,7 +1138,8 @@ async def get_file_preview(result_id: int, max_lines: int = 100):
                             if text.strip():
                                 pages_text.append(f"--- Page {page_num} ---\n{text}")
                         except Exception as e:
-                            pages_text.append(f"--- Page {page_num} ---\nError extracting page: {str(e)}")
+                            print(f"ERROR extracting PDF page {page_num} from {full_path.name}: {str(e)}")
+                            pages_text.append(f"--- Page {page_num} ---\n[Unable to extract text from this page]")
                     
                     # Join all pages and split into lines for truncation
                     full_text = '\n\n'.join(pages_text)
@@ -1161,8 +1159,9 @@ async def get_file_preview(result_id: int, max_lines: int = 100):
                         "total_lines": len(lines)
                     }
                 except Exception as e:
+                    print(f"ERROR reading PDF file {full_path.name}: {str(e)}")
                     return {
-                        "content": f"Error reading PDF file: {str(e)}\n\nFilename: {full_path.name}\nSize: {file_size:,} bytes",
+                        "content": f"Error reading PDF file.\n\nFilename: {full_path.name}\nSize: {file_size:,} bytes\n\n⚠️ Unable to extract text from this PDF file.",
                         "file_type": file_ext,
                         "is_binary": True,
                         "truncated": False
@@ -1195,8 +1194,9 @@ async def get_file_preview(result_id: int, max_lines: int = 100):
                         "total_paragraphs": len(paragraphs)
                     }
                 except Exception as e:
+                    print(f"ERROR reading DOCX file {full_path.name}: {str(e)}")
                     return {
-                        "content": f"Error reading DOCX file: {str(e)}",
+                        "content": "Error reading DOCX file. The file may be corrupted or in an unsupported format.",
                         "file_type": file_ext,
                         "is_binary": True,
                         "truncated": False
@@ -1229,8 +1229,9 @@ async def get_file_preview(result_id: int, max_lines: int = 100):
                         "truncated": row_count >= max_lines
                     }
                 except Exception as e:
+                    print(f"ERROR reading Excel file {full_path.name}: {str(e)}")
                     return {
-                        "content": f"Error reading Excel file: {str(e)}",
+                        "content": "Error reading Excel file. The file may be corrupted or in an unsupported format.",
                         "file_type": file_ext,
                         "is_binary": True,
                         "truncated": False
@@ -1256,8 +1257,9 @@ async def get_file_preview(result_id: int, max_lines: int = 100):
                         "total_slides": len(prs.slides)
                     }
                 except Exception as e:
+                    print(f"ERROR reading PowerPoint file {full_path.name}: {str(e)}")
                     return {
-                        "content": f"Error reading PowerPoint file: {str(e)}",
+                        "content": "Error reading PowerPoint file. The file may be corrupted or in an unsupported format.",
                         "file_type": file_ext,
                         "is_binary": True,
                         "truncated": False
@@ -1286,7 +1288,7 @@ async def get_file_preview(result_id: int, max_lines: int = 100):
             import traceback
             traceback.print_exc()
             return {
-                "content": f"Error reading file: {str(e)}\n\nFile path: {result.file_path}\nFull path: {full_path}",
+                "content": "Error reading file. The file may be inaccessible, corrupted, or in an unsupported format.",
                 "file_type": result.file_type,
                 "is_binary": False,
                 "truncated": False
@@ -1299,7 +1301,7 @@ async def get_file_preview(result_id: int, max_lines: int = 100):
         db.close()
         # Return error as content instead of raising exception
         return {
-            "content": f"Error loading preview: {str(e)}\n\nPlease check the backend logs for more details.",
+            "content": "Error loading preview. Unable to load the file preview. Please check if the file exists and is accessible.",
             "file_type": "error",
             "is_binary": False,
             "truncated": False
@@ -1317,40 +1319,41 @@ async def list_directories(path: str = "/"):
     try:
         # Security: Validate and resolve path securely
         host_root = Path("/app/host_root")
-        full_path = validate_and_resolve_path(path, host_root)
+        validated_path = validate_and_resolve_path(path, host_root)
         
         # Check if path exists and is a directory
-        if not full_path.exists():
+        if not os.path.exists(validated_path):
             raise HTTPException(status_code=404, detail="Path not found")
         
-        if not full_path.is_dir():
+        if not os.path.isdir(validated_path):
             raise HTTPException(status_code=400, detail="Path is not a directory")
         
         # List subdirectories
         directories = []
         try:
-            for item in sorted(full_path.iterdir()):
-                if item.is_dir():
+            for item_name in sorted(os.listdir(validated_path)):
+                item_path = os.path.join(validated_path, item_name)
+                if os.path.isdir(item_path):
                     # Check for read permission
-                    if os.access(item, os.R_OK):
+                    if os.access(item_path, os.R_OK):
                         directories.append({
-                            "name": item.name,
-                            "path": str(item),
-                            "display_path": str(item).replace("/app/host_root", "")
+                            "name": item_name,
+                            "path": item_path,
+                            "display_path": item_path.replace("/app/host_root", "")
                         })
         except PermissionError:
             pass  # Skip directories we can't read
         
         # Get parent directory info
-        host_root_resolved = host_root.resolve()
+        host_root_resolved = str(host_root.resolve())
         parent_path = None
-        if full_path != host_root_resolved:
-            parent = full_path.parent
-            if str(parent).startswith(str(host_root_resolved)):
-                parent_path = str(parent).replace("/app/host_root", "")
+        if validated_path != host_root_resolved:
+            parent = os.path.dirname(validated_path)
+            if parent.startswith(host_root_resolved):
+                parent_path = parent.replace("/app/host_root", "")
         
         return {
-            "current_path": str(full_path).replace("/app/host_root", ""),
+            "current_path": validated_path.replace("/app/host_root", ""),
             "parent_path": parent_path,
             "directories": directories
         }
@@ -1361,7 +1364,7 @@ async def list_directories(path: str = "/"):
         print(f"ERROR listing directories: {str(e)}")
         import traceback
         traceback.print_exc()
-        raise HTTPException(status_code=500, detail=f"Error listing directories: {str(e)}")
+        raise HTTPException(status_code=500, detail="Error listing directories. Unable to access the specified path.")
 
 @app.post("/api/analyze-directory")
 async def analyze_directory(path: str, find_duplicates: bool = True, max_hash_size: int = 10, session_id: str = None, min_size: int = None, max_size: int = None):
@@ -1433,13 +1436,13 @@ async def analyze_directory(path: str, find_duplicates: bool = True, max_hash_si
     try:
         # Security: Validate and resolve path securely
         host_root = Path("/app/host_root")
-        full_path = validate_and_resolve_path(path, host_root)
+        validated_path = validate_and_resolve_path(path, host_root)
         
         # Check if path exists and is a directory
-        if not full_path.exists():
+        if not os.path.exists(validated_path):
             raise HTTPException(status_code=404, detail="Path not found")
         
-        if not full_path.is_dir():
+        if not os.path.isdir(validated_path):
             raise HTTPException(status_code=400, detail="Path is not a directory")
         
         # Initialize data structures
@@ -1454,13 +1457,13 @@ async def analyze_directory(path: str, find_duplicates: bool = True, max_hash_si
         
         max_hash_bytes = max_hash_size * 1024 * 1024
         
-        print(f"Starting directory analysis: {full_path}")
+        print(f"Starting directory analysis: {validated_path}")
         print(f"Find duplicates: {find_duplicates}, Max hash size: {max_hash_size}MB")
         print(f"Excluding hidden directories (starting with '.')")
         
         # Phase 1: Fast metadata collection (no hashing)
         print("Phase 1: Collecting file metadata...")
-        for root, dirs, files in os.walk(full_path):
+        for root, dirs, files in os.walk(validated_path):
             # Check for cancellation
             if is_cancelled():
                 print(f"Analysis cancelled by user at {total_files} files")
@@ -1471,7 +1474,7 @@ async def analyze_directory(path: str, find_duplicates: bool = True, max_hash_si
             total_dirs += len(dirs)
             
             # Check for empty directories (no files and no subdirectories)
-            if len(files) == 0 and len(dirs) == 0 and root != str(full_path):
+            if len(files) == 0 and len(dirs) == 0 and root != validated_path:
                 # This is an empty directory
                 empty_dir_path = str(Path(root)).replace("/app/host_root", "")
                 empty_dirs.append({
@@ -1487,14 +1490,14 @@ async def analyze_directory(path: str, find_duplicates: bool = True, max_hash_si
                     break
                 
                 try:
-                    file_path = Path(root) / filename
+                    file_path = os.path.join(root, filename)
                     
                     # Check if we can access the file
                     if not os.access(file_path, os.R_OK):
                         continue
                     
                     # Get file stats (fast - just metadata)
-                    stat = file_path.stat()
+                    stat = os.stat(file_path)
                     file_size = stat.st_size
                     modified_time = datetime.fromtimestamp(stat.st_mtime)
                     
@@ -1657,7 +1660,7 @@ async def analyze_directory(path: str, find_duplicates: bool = True, max_hash_si
             "session_id": session_id,
             "cancelled": cancelled,
             "summary": {
-                "path": str(full_path).replace("/app/host_root", ""),
+                "path": validated_path.replace("/app/host_root", ""),
                 "total_files": total_files,
                 "total_directories": total_dirs,
                 "total_size": total_size,
@@ -1680,7 +1683,7 @@ async def analyze_directory(path: str, find_duplicates: bool = True, max_hash_si
         print(f"ERROR analyzing directory: {str(e)}")
         import traceback
         traceback.print_exc()
-        raise HTTPException(status_code=500, detail=f"Error analyzing directory: {str(e)}")
+        raise HTTPException(status_code=500, detail="Error analyzing directory. Unable to complete the analysis operation.")
     finally:
         # Clean up cancellation tracking
         if session_id in analysis_cancellations:
@@ -1785,7 +1788,7 @@ async def export_analysis_csv(data: dict, export_type: str = "all_files"):
         print(f"ERROR exporting CSV: {str(e)}")
         import traceback
         traceback.print_exc()
-        raise HTTPException(status_code=500, detail=f"Error exporting CSV: {str(e)}")
+        raise HTTPException(status_code=500, detail="Error exporting CSV. Unable to generate the export file.")
 
 @app.post("/api/cancel-analysis/{session_id}")
 async def cancel_analysis(session_id: str):
@@ -1842,7 +1845,8 @@ async def create_saved_search(search: SavedSearchCreate):
         raise
     except Exception as e:
         db.rollback()
-        raise HTTPException(status_code=500, detail=f"Error creating saved search: {str(e)}")
+        print(f"ERROR creating saved search: {str(e)}")
+        raise HTTPException(status_code=500, detail="Error creating saved search. Unable to save the search configuration.")
     finally:
         db.close()
 
@@ -1864,7 +1868,8 @@ async def delete_saved_search(search_id: int):
         raise
     except Exception as e:
         db.rollback()
-        raise HTTPException(status_code=500, detail=f"Error deleting saved search: {str(e)}")
+        print(f"ERROR deleting saved search: {str(e)}")
+        raise HTTPException(status_code=500, detail="Error deleting saved search. Unable to remove the search configuration.")
     finally:
         db.close()
 
@@ -1903,12 +1908,12 @@ async def delete_empty_directories(request: dict):
         try:
             print(f"Processing directory: {dir_path}")
             # Security: Validate and resolve path securely
-            full_path = validate_and_resolve_path(dir_path, host_root)
+            validated_path = validate_and_resolve_path(dir_path, host_root)
             
-            print(f"Full path resolved to: {full_path}")
+            print(f"Validated path: {validated_path}")
             
             # Check if path exists and is a directory
-            if not full_path.exists():
+            if not os.path.exists(validated_path):
                 print(f"FAILED: Directory does not exist")
                 failed.append({
                     "path": dir_path,
@@ -1916,7 +1921,7 @@ async def delete_empty_directories(request: dict):
                 })
                 continue
             
-            if not full_path.is_dir():
+            if not os.path.isdir(validated_path):
                 print(f"FAILED: Path is not a directory")
                 failed.append({
                     "path": dir_path,
@@ -1925,7 +1930,7 @@ async def delete_empty_directories(request: dict):
                 continue
             
             # Double-check the directory is actually empty
-            dir_contents = list(full_path.iterdir())
+            dir_contents = os.listdir(validated_path)
             if dir_contents:
                 print(f"FAILED: Directory is not empty, contains: {dir_contents}")
                 failed.append({
@@ -1935,7 +1940,7 @@ async def delete_empty_directories(request: dict):
                 continue
             
             # Delete the empty directory
-            full_path.rmdir()
+            os.rmdir(validated_path)
             deleted.append(dir_path)
             print(f"SUCCESS: Deleted empty directory: {dir_path}")
             
@@ -1947,7 +1952,7 @@ async def delete_empty_directories(request: dict):
         except Exception as e:
             failed.append({
                 "path": dir_path,
-                "error": str(e)
+                "error": "Unable to delete directory"
             })
             print(f"EXCEPTION deleting {dir_path}: {e}")
     

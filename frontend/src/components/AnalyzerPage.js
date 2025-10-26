@@ -233,8 +233,11 @@ function AnalyzerPage() {
     setAnalyzing(true);
     setAnalysisData(null);
     
-    // Generate a session ID
-    const sessionId = `analysis_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+    // Generate a cryptographically secure session ID
+    const randomBytes = new Uint8Array(9);
+    crypto.getRandomValues(randomBytes);
+    const randomString = Array.from(randomBytes, byte => byte.toString(36).padStart(2, '0')).join('').substr(0, 9);
+    const sessionId = `analysis_${Date.now()}_${randomString}`;
     setCurrentSessionId(sessionId);
 
     try {
