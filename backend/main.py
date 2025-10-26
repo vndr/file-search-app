@@ -2,6 +2,7 @@ import os
 import re
 import time
 import zipfile
+import tarfile
 import asyncio
 import mimetypes
 from datetime import datetime
@@ -16,6 +17,29 @@ from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import sessionmaker, Session, relationship
 from pydantic import BaseModel
 import uvicorn
+
+# Document processing libraries
+try:
+    from docx import Document as DocxDocument
+except ImportError:
+    DocxDocument = None
+
+try:
+    from openpyxl import load_workbook
+except ImportError:
+    load_workbook = None
+
+try:
+    from pptx import Presentation
+except ImportError:
+    Presentation = None
+
+try:
+    from odf.opendocument import load as odf_load
+    from odf.text import P as OdfP
+except ImportError:
+    odf_load = None
+    OdfP = None
 
 
 # Database setup
@@ -160,9 +184,30 @@ class FileSearchEngine:
                 total_files += 1
                 
                 try:
-                    if file_path.suffix.lower() == '.zip' and request.include_zip_files:
+                    file_ext = file_path.suffix.lower()
+                    
+                    # Handle archive files
+                    if file_ext == '.zip' and request.include_zip_files:
                         matches = await self._search_zip_file(file_path, search_pattern, session_id)
                         total_matches += matches
+                    elif file_ext in {'.tar', '.gz', '.bz2', '.tgz', '.tar.gz', '.tar.bz2'} and request.include_zip_files:
+                        matches = await self._search_tar_file(file_path, search_pattern, session_id)
+                        total_matches += matches
+                    # Handle Microsoft Office documents
+                    elif file_ext in {'.docx', '.doc'}:
+                        matches = await self._search_docx_file(file_path, search_pattern, session_id)
+                        total_matches += matches
+                    elif file_ext in {'.xlsx', '.xls'}:
+                        matches = await self._search_xlsx_file(file_path, search_pattern, session_id)
+                        total_matches += matches
+                    elif file_ext in {'.pptx', '.ppt'}:
+                        matches = await self._search_pptx_file(file_path, search_pattern, session_id)
+                        total_matches += matches
+                    # Handle LibreOffice/OpenDocument files
+                    elif file_ext in {'.odt', '.ods', '.odp'}:
+                        matches = await self._search_odf_file(file_path, search_pattern, session_id)
+                        total_matches += matches
+                    # Handle regular text files
                     elif self._is_text_file(file_path):
                         matches = await self._search_text_file(file_path, search_pattern, session_id)
                         total_matches += matches
@@ -350,6 +395,293 @@ class FileSearchEngine:
                 
         except Exception as e:
             print(f"Error reading zip file {zip_path}: {e}")
+        
+        return total_matches
+    
+    async def _search_tar_file(self, tar_path: Path, pattern: re.Pattern, session_id: int) -> int:
+        """Search for pattern inside tar/tar.gz/tar.bz2 files"""
+        total_matches = 0
+        
+        try:
+            # Determine compression mode
+            if tar_path.suffix in {'.gz', '.tgz'} or str(tar_path).endswith('.tar.gz'):
+                mode = 'r:gz'
+            elif tar_path.suffix in {'.bz2'} or str(tar_path).endswith('.tar.bz2'):
+                mode = 'r:bz2'
+            else:
+                mode = 'r'
+            
+            with tarfile.open(tar_path, mode) as tar_file:
+                for member in tar_file.getmembers():
+                    if not member.isfile():
+                        continue
+                    
+                    file_name = Path(member.name).name
+                    file_ext = Path(member.name).suffix.lower()
+                    
+                    if file_ext not in self.supported_text_extensions:
+                        continue
+                    
+                    try:
+                        f = tar_file.extractfile(member)
+                        if f is None:
+                            continue
+                        
+                        content = f.read().decode('utf-8', errors='ignore')
+                        f.close()
+                        
+                        matches = list(pattern.finditer(content))
+                        if matches:
+                            result = SearchResult(
+                                session_id=session_id,
+                                file_path=member.name,
+                                file_name=file_name,
+                                file_size=member.size,
+                                file_type=file_ext,
+                                match_count=len(matches),
+                                is_zip_file=True,
+                                zip_parent_path=str(tar_path).replace('/app/host_root', ''),
+                                preview_text=self._create_preview(content, matches[0].start())
+                            )
+                            self.db_session.add(result)
+                            self.db_session.flush()
+                            
+                            # Add match details (limit to first 5 matches)
+                            lines = content.split('\n')
+                            for match in matches[:5]:
+                                line_num = content[:match.start()].count('\n') + 1
+                                line_content = lines[line_num - 1] if line_num <= len(lines) else ""
+                                
+                                match_detail = MatchDetail(
+                                    result_id=result.id,
+                                    line_number=line_num,
+                                    line_content=line_content,
+                                    match_position=match.start() - content.rfind('\n', 0, match.start()) - 1
+                                )
+                                self.db_session.add(match_detail)
+                            
+                            total_matches += len(matches)
+                    
+                    except Exception as e:
+                        print(f"Error reading {member.name} from {tar_path}: {e}")
+                        continue
+                
+                self.db_session.commit()
+                
+        except Exception as e:
+            print(f"Error reading tar file {tar_path}: {e}")
+        
+        return total_matches
+    
+    async def _search_docx_file(self, docx_path: Path, pattern: re.Pattern, session_id: int) -> int:
+        """Search for pattern inside DOCX files"""
+        if DocxDocument is None:
+            return 0
+        
+        total_matches = 0
+        try:
+            doc = DocxDocument(str(docx_path))
+            content = '\n'.join([paragraph.text for paragraph in doc.paragraphs])
+            
+            matches = list(pattern.finditer(content))
+            if matches:
+                result = SearchResult(
+                    session_id=session_id,
+                    file_path=str(docx_path).replace('/app/host_root', ''),
+                    file_name=docx_path.name,
+                    file_size=docx_path.stat().st_size,
+                    file_type=docx_path.suffix.lower(),
+                    match_count=len(matches),
+                    is_zip_file=False,
+                    preview_text=self._create_preview(content, matches[0].start())
+                )
+                self.db_session.add(result)
+                self.db_session.flush()
+                
+                # Add match details
+                for match in matches[:10]:
+                    line_num = content[:match.start()].count('\n') + 1
+                    lines = content.split('\n')
+                    line_content = lines[line_num - 1] if line_num <= len(lines) else ""
+                    
+                    match_detail = MatchDetail(
+                        result_id=result.id,
+                        line_number=line_num,
+                        line_content=line_content,
+                        match_position=match.start() - content.rfind('\n', 0, match.start()) - 1
+                    )
+                    self.db_session.add(match_detail)
+                
+                total_matches = len(matches)
+                self.db_session.commit()
+                
+        except Exception as e:
+            print(f"Error reading DOCX file {docx_path}: {e}")
+        
+        return total_matches
+    
+    async def _search_xlsx_file(self, xlsx_path: Path, pattern: re.Pattern, session_id: int) -> int:
+        """Search for pattern inside XLSX files"""
+        if load_workbook is None:
+            return 0
+        
+        total_matches = 0
+        try:
+            workbook = load_workbook(str(xlsx_path), read_only=True, data_only=True)
+            content_parts = []
+            
+            for sheet in workbook.worksheets:
+                for row in sheet.iter_rows(values_only=True):
+                    row_text = ' '.join([str(cell) if cell is not None else '' for cell in row])
+                    if row_text.strip():
+                        content_parts.append(row_text)
+            
+            content = '\n'.join(content_parts)
+            workbook.close()
+            
+            matches = list(pattern.finditer(content))
+            if matches:
+                result = SearchResult(
+                    session_id=session_id,
+                    file_path=str(xlsx_path).replace('/app/host_root', ''),
+                    file_name=xlsx_path.name,
+                    file_size=xlsx_path.stat().st_size,
+                    file_type=xlsx_path.suffix.lower(),
+                    match_count=len(matches),
+                    is_zip_file=False,
+                    preview_text=self._create_preview(content, matches[0].start())
+                )
+                self.db_session.add(result)
+                self.db_session.flush()
+                
+                # Add match details
+                for match in matches[:10]:
+                    line_num = content[:match.start()].count('\n') + 1
+                    lines = content.split('\n')
+                    line_content = lines[line_num - 1] if line_num <= len(lines) else ""
+                    
+                    match_detail = MatchDetail(
+                        result_id=result.id,
+                        line_number=line_num,
+                        line_content=line_content,
+                        match_position=match.start() - content.rfind('\n', 0, match.start()) - 1
+                    )
+                    self.db_session.add(match_detail)
+                
+                total_matches = len(matches)
+                self.db_session.commit()
+                
+        except Exception as e:
+            print(f"Error reading XLSX file {xlsx_path}: {e}")
+        
+        return total_matches
+    
+    async def _search_pptx_file(self, pptx_path: Path, pattern: re.Pattern, session_id: int) -> int:
+        """Search for pattern inside PPTX files"""
+        if Presentation is None:
+            return 0
+        
+        total_matches = 0
+        try:
+            prs = Presentation(str(pptx_path))
+            content_parts = []
+            
+            for slide in prs.slides:
+                for shape in slide.shapes:
+                    if hasattr(shape, "text"):
+                        content_parts.append(shape.text)
+            
+            content = '\n'.join(content_parts)
+            
+            matches = list(pattern.finditer(content))
+            if matches:
+                result = SearchResult(
+                    session_id=session_id,
+                    file_path=str(pptx_path).replace('/app/host_root', ''),
+                    file_name=pptx_path.name,
+                    file_size=pptx_path.stat().st_size,
+                    file_type=pptx_path.suffix.lower(),
+                    match_count=len(matches),
+                    is_zip_file=False,
+                    preview_text=self._create_preview(content, matches[0].start())
+                )
+                self.db_session.add(result)
+                self.db_session.flush()
+                
+                # Add match details
+                for match in matches[:10]:
+                    line_num = content[:match.start()].count('\n') + 1
+                    lines = content.split('\n')
+                    line_content = lines[line_num - 1] if line_num <= len(lines) else ""
+                    
+                    match_detail = MatchDetail(
+                        result_id=result.id,
+                        line_number=line_num,
+                        line_content=line_content,
+                        match_position=match.start() - content.rfind('\n', 0, match.start()) - 1
+                    )
+                    self.db_session.add(match_detail)
+                
+                total_matches = len(matches)
+                self.db_session.commit()
+                
+        except Exception as e:
+            print(f"Error reading PPTX file {pptx_path}: {e}")
+        
+        return total_matches
+    
+    async def _search_odf_file(self, odf_path: Path, pattern: re.Pattern, session_id: int) -> int:
+        """Search for pattern inside ODF files (ODT, ODS, ODP)"""
+        if odf_load is None or OdfP is None:
+            return 0
+        
+        total_matches = 0
+        try:
+            doc = odf_load(str(odf_path))
+            content_parts = []
+            
+            # Extract text from all paragraph elements
+            for paragraph in doc.getElementsByType(OdfP):
+                text = str(paragraph)
+                if text.strip():
+                    content_parts.append(text)
+            
+            content = '\n'.join(content_parts)
+            
+            matches = list(pattern.finditer(content))
+            if matches:
+                result = SearchResult(
+                    session_id=session_id,
+                    file_path=str(odf_path).replace('/app/host_root', ''),
+                    file_name=odf_path.name,
+                    file_size=odf_path.stat().st_size,
+                    file_type=odf_path.suffix.lower(),
+                    match_count=len(matches),
+                    is_zip_file=False,
+                    preview_text=self._create_preview(content, matches[0].start())
+                )
+                self.db_session.add(result)
+                self.db_session.flush()
+                
+                # Add match details
+                for match in matches[:10]:
+                    line_num = content[:match.start()].count('\n') + 1
+                    lines = content.split('\n')
+                    line_content = lines[line_num - 1] if line_num <= len(lines) else ""
+                    
+                    match_detail = MatchDetail(
+                        result_id=result.id,
+                        line_number=line_num,
+                        line_content=line_content,
+                        match_position=match.start() - content.rfind('\n', 0, match.start()) - 1
+                    )
+                    self.db_session.add(match_detail)
+                
+                total_matches = len(matches)
+                self.db_session.commit()
+                
+        except Exception as e:
+            print(f"Error reading ODF file {odf_path}: {e}")
         
         return total_matches
     

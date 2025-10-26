@@ -254,8 +254,11 @@ function SearchPage() {
                       disabled={isSearching}
                     />
                   }
-                  label="Include ZIP Files"
+                  label="Include Archive & Document Files"
                 />
+                <Typography variant="caption" color="text.secondary" sx={{ display: 'block', ml: 4, mt: -1, mb: 2 }}>
+                  Searches inside: ZIP, TAR, TAR.GZ, TAR.BZ2, DOCX, XLSX, PPTX, ODT, ODS, ODP
+                </Typography>
               </Box>
 
               {isSearching ? (

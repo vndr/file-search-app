@@ -10,7 +10,8 @@ A powerful web-based file search application that can search for text patterns a
 ## 🌟 Features
 
 - **Deep File Search**: Search across all files in directories and subdirectories
-- **ZIP File Support**: Search inside ZIP archives and compressed files
+- **Archive Support**: Search inside ZIP, TAR, TAR.GZ, TAR.BZ2, and TGZ files
+- **Document Search**: Search in Microsoft Office (DOCX, XLSX, PPTX) and LibreOffice (ODT, ODS, ODP) documents
 - **Real-time Progress**: Live updates during search with WebSocket connection
 - **Modern Web UI**: Clean, responsive interface built with React and Material-UI
 - **Search History**: Track and revisit previous searches
@@ -131,6 +132,9 @@ The application automatically detects and searches these file types:
 - **Documentation**: .md, .rst, .txt
 - **Configuration**: .cfg, .conf, .ini, .properties
 - **Scripts**: .sh, .bash, .ps1, .bat
+- **Archives**: .zip, .tar, .tar.gz, .tar.bz2, .tgz (searches inside)
+- **Microsoft Office**: .docx, .xlsx, .pptx (Word, Excel, PowerPoint)
+- **LibreOffice**: .odt, .ods, .odp (Writer, Calc, Impress)
 - **And many more...**
 
 ## 🐳 Docker Services
