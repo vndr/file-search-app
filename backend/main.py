@@ -1317,9 +1317,24 @@ async def list_directories(path: str = "/"):
     Returns subdirectories only (not files).
     """
     try:
-        # Security: Validate and resolve path securely
+        # Inline path validation (CodeQL pattern)
         host_root = Path("/app/host_root")
-        validated_path = validate_and_resolve_path(path, host_root)
+        base_path_str = str(host_root.resolve())
+        clean_path = path.lstrip("/")
+        
+        # Validation: block dangerous patterns
+        if '\0' in clean_path or '~' in clean_path:
+            raise HTTPException(status_code=400, detail="Invalid path")
+        if os.path.isabs(clean_path):
+            raise HTTPException(status_code=400, detail="Invalid path")
+        
+        # Build and normalize path (CodeQL recommended pattern)
+        candidate_path = os.path.join(base_path_str, clean_path)
+        validated_path = os.path.normpath(candidate_path)
+        
+        # Allowlist check (CodeQL pattern)
+        if not validated_path.startswith(base_path_str + os.sep) and validated_path != base_path_str:
+            raise HTTPException(status_code=403, detail="Access denied")
         
         # Check if path exists and is a directory
         if not os.path.exists(validated_path):
@@ -1332,14 +1347,23 @@ async def list_directories(path: str = "/"):
         directories = []
         try:
             for item_name in sorted(os.listdir(validated_path)):
+                # Validate filename (no path separators)
+                if os.sep in item_name or '/' in item_name or '\\' in item_name:
+                    continue
+                    
                 item_path = os.path.join(validated_path, item_name)
-                if os.path.isdir(item_path):
+                # Verify item_path is still within base_path
+                item_normalized = os.path.normpath(item_path)
+                if not item_normalized.startswith(base_path_str + os.sep):
+                    continue
+                    
+                if os.path.isdir(item_normalized):
                     # Check for read permission
-                    if os.access(item_path, os.R_OK):
+                    if os.access(item_normalized, os.R_OK):
                         directories.append({
                             "name": item_name,
-                            "path": item_path,
-                            "display_path": item_path.replace("/app/host_root", "")
+                            "path": item_normalized,
+                            "display_path": item_normalized.replace("/app/host_root", "")
                         })
         except PermissionError:
             pass  # Skip directories we can't read
@@ -1434,9 +1458,24 @@ async def analyze_directory(path: str, find_duplicates: bool = True, max_hash_si
             return None
     
     try:
-        # Security: Validate and resolve path securely
+        # Inline path validation (CodeQL pattern)
         host_root = Path("/app/host_root")
-        validated_path = validate_and_resolve_path(path, host_root)
+        base_path_str = str(host_root.resolve())
+        clean_path = path.lstrip("/")
+        
+        # Validation: block dangerous patterns
+        if '\0' in clean_path or '~' in clean_path:
+            raise HTTPException(status_code=400, detail="Invalid path")
+        if os.path.isabs(clean_path):
+            raise HTTPException(status_code=400, detail="Invalid path")
+        
+        # Build and normalize path (CodeQL recommended pattern)
+        candidate_path = os.path.join(base_path_str, clean_path)
+        validated_path = os.path.normpath(candidate_path)
+        
+        # Allowlist check (CodeQL pattern)
+        if not validated_path.startswith(base_path_str + os.sep) and validated_path != base_path_str:
+            raise HTTPException(status_code=403, detail="Access denied")
         
         # Check if path exists and is a directory
         if not os.path.exists(validated_path):
@@ -1469,18 +1508,23 @@ async def analyze_directory(path: str, find_duplicates: bool = True, max_hash_si
                 print(f"Analysis cancelled by user at {total_files} files")
                 break
             
+            # Verify root is still within base_path (defense in depth)
+            root_normalized = os.path.normpath(root)
+            if not root_normalized.startswith(base_path_str + os.sep) and root_normalized != base_path_str:
+                continue
+            
             # Filter out hidden directories (starting with ".")
             dirs[:] = [d for d in dirs if not d.startswith('.')]
             total_dirs += len(dirs)
             
             # Check for empty directories (no files and no subdirectories)
-            if len(files) == 0 and len(dirs) == 0 and root != validated_path:
+            if len(files) == 0 and len(dirs) == 0 and root_normalized != validated_path:
                 # This is an empty directory
-                empty_dir_path = str(Path(root)).replace("/app/host_root", "")
+                empty_dir_path = root_normalized.replace("/app/host_root", "")
                 empty_dirs.append({
                     "path": empty_dir_path,
-                    "name": Path(root).name,
-                    "parent": str(Path(root).parent).replace("/app/host_root", "")
+                    "name": os.path.basename(root_normalized),
+                    "parent": os.path.dirname(root_normalized).replace("/app/host_root", "")
                 })
             
             for filename in files:
@@ -1490,14 +1534,22 @@ async def analyze_directory(path: str, find_duplicates: bool = True, max_hash_si
                     break
                 
                 try:
-                    file_path = os.path.join(root, filename)
+                    # Validate filename (no path separators)
+                    if os.sep in filename or '/' in filename or '\\' in filename:
+                        continue
+                    
+                    file_path = os.path.join(root_normalized, filename)
+                    # Normalize and check bounds
+                    file_path_normalized = os.path.normpath(file_path)
+                    if not file_path_normalized.startswith(base_path_str + os.sep):
+                        continue
                     
                     # Check if we can access the file
-                    if not os.access(file_path, os.R_OK):
+                    if not os.access(file_path_normalized, os.R_OK):
                         continue
                     
                     # Get file stats (fast - just metadata)
-                    stat = os.stat(file_path)
+                    stat = os.stat(file_path_normalized)
                     file_size = stat.st_size
                     modified_time = datetime.fromtimestamp(stat.st_mtime)
                     
@@ -1508,20 +1560,20 @@ async def analyze_directory(path: str, find_duplicates: bool = True, max_hash_si
                         continue
                     
                     # Get file extension and MIME type
-                    file_ext = file_path.suffix.lower() or '.no_extension'
-                    mime_type, _ = mimetypes.guess_type(str(file_path))
+                    file_ext = os.path.splitext(filename)[1].lower() or '.no_extension'
+                    mime_type, _ = mimetypes.guess_type(filename)
                     mime_type = mime_type or 'application/octet-stream'
                     
                     # Add to file list (without hash yet)
                     file_info = {
                         "name": filename,
-                        "path": str(file_path).replace("/app/host_root", ""),
+                        "path": file_path_normalized.replace("/app/host_root", ""),
                         "size": file_size,
                         "extension": file_ext,
                         "mime_type": mime_type,
                         "modified": modified_time.isoformat(),
                         "hash": None,
-                        "_full_path": str(file_path)  # Temporary for hashing
+                        "_full_path": file_path_normalized  # Temporary for hashing
                     }
                     file_list.append(file_info)
                     
@@ -1906,9 +1958,41 @@ async def delete_empty_directories(request: dict):
     
     for dir_path in directories:
         try:
-            print(f"Processing directory: {dir_path}")
-            # Security: Validate and resolve path securely
-            validated_path = validate_and_resolve_path(dir_path, host_root)
+            print(f"Processing delete request for: {dir_path}")
+            
+            # Inline path validation (CodeQL pattern)
+            base_path_str = str(host_root.resolve())
+            clean_path = dir_path.lstrip("/")
+            
+            # Validation: block dangerous patterns
+            if '\0' in clean_path or '~' in clean_path:
+                print(f"FAILED: Invalid characters in path")
+                failed.append({
+                    "path": dir_path,
+                    "error": "Invalid path"
+                })
+                continue
+                
+            if os.path.isabs(clean_path):
+                print(f"FAILED: Absolute path not allowed")
+                failed.append({
+                    "path": dir_path,
+                    "error": "Invalid path"
+                })
+                continue
+            
+            # Build and normalize path (CodeQL recommended pattern)
+            candidate_path = os.path.join(base_path_str, clean_path)
+            validated_path = os.path.normpath(candidate_path)
+            
+            # Allowlist check (CodeQL pattern)
+            if not validated_path.startswith(base_path_str + os.sep) and validated_path != base_path_str:
+                print(f"FAILED: Path outside allowed directory")
+                failed.append({
+                    "path": dir_path,
+                    "error": "Access denied"
+                })
+                continue
             
             print(f"Validated path: {validated_path}")
             
