@@ -1318,7 +1318,8 @@ async def analyze_directory(path: str, find_duplicates: bool = True, max_hash_si
         - Files >= 1MB: Hash first 64KB + middle 64KB + last 64KB + size
         """
         try:
-            hash_md5 = hashlib.md5()
+            # MD5 is used for file content comparison (duplicate detection), not security
+            hash_md5 = hashlib.md5(usedforsecurity=False)
             
             # Always include file size in hash
             hash_md5.update(str(file_size).encode())

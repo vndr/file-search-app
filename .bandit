@@ -1,0 +1,16 @@
+[bandit]
+# Bandit configuration file
+# Skip tests that are incompatible with Python 3.14 or not applicable
+
+# B607: start_process_with_partial_path - causes ast.Num error in Python 3.14
+# B603: subprocess_without_shell_equals_true - causes ast.Num error in Python 3.14
+skips = B607,B603
+
+# Exclude test directories and virtual environments
+exclude_dirs = "/tests,/venv,/.venv,/node_modules,/__pycache__"
+
+# Set confidence level (LOW, MEDIUM, HIGH)
+confidence = HIGH
+
+# Set severity level (LOW, MEDIUM, HIGH)
+level = LOW
