@@ -18,6 +18,17 @@ import {
   Grid,
   Divider,
   Pagination,
+  Dialog,
+  DialogTitle,
+  DialogContent,
+  DialogActions,
+  Button,
+  Table,
+  TableBody,
+  TableRow,
+  TableCell,
+  Card,
+  CardContent,
 } from '@mui/material';
 import {
   ArrowBack,
@@ -27,6 +38,10 @@ import {
   Folder,
   Schedule,
   FindInPage,
+  Close as CloseIcon,
+  Info as InfoIcon,
+  Visibility as VisibilityIcon,
+  InsertDriveFile as FileIcon,
 } from '@mui/icons-material';
 import axios from 'axios';
 import moment from 'moment';
@@ -42,6 +57,8 @@ function ResultsPage() {
   const [searchFilter, setSearchFilter] = useState('');
   const [selectedResult, setSelectedResult] = useState(null);
   const [matchDetails, setMatchDetails] = useState([]);
+  const [showDetailsDialog, setShowDetailsDialog] = useState(false);
+  const [filePreview, setFilePreview] = useState('');
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [page, setPage] = useState(1);
@@ -104,7 +121,22 @@ function ResultsPage() {
 
   const handleResultClick = async (result) => {
     setSelectedResult(result);
+    setShowDetailsDialog(true);
+    setFilePreview('Loading preview...');
     await fetchMatchDetails(result.id);
+    
+    // Fetch actual file preview from server
+    try {
+      const response = await axios.get(`${API_BASE_URL}/results/${result.id}/preview?max_lines=100`);
+      if (response.data && response.data.content) {
+        setFilePreview(response.data.content);
+      } else {
+        setFilePreview('No preview available');
+      }
+    } catch (error) {
+      console.error('Error loading preview:', error);
+      setFilePreview('Error loading file preview. The file may not be accessible.');
+    }
   };
 
   const copyToClipboard = (text) => {
@@ -398,6 +430,177 @@ function ResultsPage() {
           </Grid>
         )}
       </Grid>
+
+      {/* File Details Dialog */}
+      <Dialog
+        open={showDetailsDialog}
+        onClose={() => setShowDetailsDialog(false)}
+        maxWidth="md"
+        fullWidth
+      >
+        <DialogTitle>
+          <Box display="flex" alignItems="center" justifyContent="space-between">
+            <Box display="flex" alignItems="center" gap={1}>
+              <FileIcon color="primary" />
+              <Typography variant="h6">File Details</Typography>
+            </Box>
+            <IconButton onClick={() => setShowDetailsDialog(false)} size="small">
+              <CloseIcon />
+            </IconButton>
+          </Box>
+        </DialogTitle>
+        
+        <DialogContent dividers>
+          {selectedResult && (
+            <Box>
+              {/* File Information Card */}
+              <Card sx={{ mb: 3 }}>
+                <CardContent>
+                  <Typography variant="h6" gutterBottom color="primary">
+                    📄 {selectedResult.file_name}
+                  </Typography>
+                  
+                  <Table size="small" sx={{ mt: 2 }}>
+                    <TableBody>
+                      <TableRow>
+                        <TableCell sx={{ fontWeight: 'bold', width: '30%' }}>File Name:</TableCell>
+                        <TableCell>{selectedResult.file_name}</TableCell>
+                      </TableRow>
+                      <TableRow>
+                        <TableCell sx={{ fontWeight: 'bold' }}>Full Path:</TableCell>
+                        <TableCell>
+                          <Box display="flex" alignItems="center" gap={1}>
+                            <Typography variant="body2" sx={{ wordBreak: 'break-all' }}>
+                              {selectedResult.is_zip_file 
+                                ? `${selectedResult.zip_parent_path} > ${selectedResult.file_path}`
+                                : selectedResult.file_path}
+                            </Typography>
+                            <IconButton 
+                              size="small" 
+                              onClick={() => copyToClipboard(selectedResult.file_path)}
+                              title="Copy path"
+                            >
+                              <FileCopy fontSize="small" />
+                            </IconButton>
+                          </Box>
+                        </TableCell>
+                      </TableRow>
+                      <TableRow>
+                        <TableCell sx={{ fontWeight: 'bold' }}>File Type:</TableCell>
+                        <TableCell>
+                          <Chip 
+                            label={selectedResult.file_type || 'unknown'} 
+                            size="small" 
+                            color={getFileTypeColor(selectedResult.file_type)}
+                          />
+                        </TableCell>
+                      </TableRow>
+                      <TableRow>
+                        <TableCell sx={{ fontWeight: 'bold' }}>File Size:</TableCell>
+                        <TableCell>
+                          {formatFileSize(selectedResult.file_size)} 
+                          <Typography variant="caption" color="text.secondary" sx={{ ml: 1 }}>
+                            ({selectedResult.file_size?.toLocaleString()} bytes)
+                          </Typography>
+                        </TableCell>
+                      </TableRow>
+                      <TableRow>
+                        <TableCell sx={{ fontWeight: 'bold' }}>Matches Found:</TableCell>
+                        <TableCell>
+                          <Chip label={`${selectedResult.match_count} matches`} color="primary" size="small" />
+                        </TableCell>
+                      </TableRow>
+                      <TableRow>
+                        <TableCell sx={{ fontWeight: 'bold' }}>Location Type:</TableCell>
+                        <TableCell>
+                          <Chip 
+                            label={selectedResult.is_zip_file ? 'Inside Archive' : 'Regular File'} 
+                            color={selectedResult.is_zip_file ? 'warning' : 'success'}
+                            size="small"
+                            icon={selectedResult.is_zip_file ? <FileCopy /> : <Folder />}
+                          />
+                        </TableCell>
+                      </TableRow>
+                      {selectedResult.is_zip_file && (
+                        <TableRow>
+                          <TableCell sx={{ fontWeight: 'bold' }}>Archive Path:</TableCell>
+                          <TableCell>{selectedResult.zip_parent_path}</TableCell>
+                        </TableRow>
+                      )}
+                    </TableBody>
+                  </Table>
+                </CardContent>
+              </Card>
+
+              {/* Preview Card */}
+              <Card>
+                <CardContent>
+                  <Box display="flex" alignItems="center" gap={1} mb={2}>
+                    <VisibilityIcon color="primary" />
+                    <Typography variant="h6">File Preview</Typography>
+                  </Box>
+                  
+                  <Box 
+                    sx={{ 
+                      bgcolor: 'grey.100', 
+                      p: 2, 
+                      borderRadius: 1, 
+                      maxHeight: 400, 
+                      overflow: 'auto',
+                      fontFamily: 'monospace',
+                      fontSize: '0.875rem'
+                    }}
+                  >
+                    <pre style={{ margin: 0, whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>
+                      {filePreview}
+                    </pre>
+                  </Box>
+                  
+                  {matchDetails.length > 10 && (
+                    <Typography variant="caption" color="text.secondary" sx={{ mt: 1, display: 'block' }}>
+                      Showing first 10 of {matchDetails.length} matches. Scroll down to see all matches in the results panel.
+                    </Typography>
+                  )}
+                </CardContent>
+              </Card>
+
+              {/* Match Summary */}
+              {matchDetails.length > 0 && (
+                <Card sx={{ mt: 2 }}>
+                  <CardContent>
+                    <Box display="flex" alignItems="center" gap={1} mb={2}>
+                      <FindInPage color="primary" />
+                      <Typography variant="h6">Match Summary</Typography>
+                    </Box>
+                    
+                    <Grid container spacing={2}>
+                      <Grid item xs={6}>
+                        <Typography variant="body2" color="text.secondary">Total Matches:</Typography>
+                        <Typography variant="h6">{selectedResult.match_count}</Typography>
+                      </Grid>
+                      <Grid item xs={6}>
+                        <Typography variant="body2" color="text.secondary">Lines with Matches:</Typography>
+                        <Typography variant="h6">{matchDetails.length}</Typography>
+                      </Grid>
+                    </Grid>
+                  </CardContent>
+                </Card>
+              )}
+            </Box>
+          )}
+        </DialogContent>
+        
+        <DialogActions>
+          <Button onClick={() => setShowDetailsDialog(false)}>Close</Button>
+          <Button 
+            variant="contained" 
+            onClick={() => copyToClipboard(selectedResult?.file_path || '')}
+            startIcon={<FileCopy />}
+          >
+            Copy Path
+          </Button>
+        </DialogActions>
+      </Dialog>
     </Box>
   );
 }

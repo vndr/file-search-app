@@ -41,6 +41,11 @@ except ImportError:
     odf_load = None
     OdfP = None
 
+try:
+    from PyPDF2 import PdfReader
+except ImportError:
+    PdfReader = None
+
 
 # Database setup
 DATABASE_URL = os.getenv("DATABASE_URL", "postgresql://postgres:password@localhost:5432/filesearch")
@@ -891,6 +896,272 @@ async def delete_search_session(session_id: int):
         db.delete(session)
         db.commit()
         return {"message": "Session deleted successfully"}
+    finally:
+        db.close()
+
+@app.get("/results/{result_id}/preview")
+async def get_file_preview(result_id: int, max_lines: int = 100):
+    """Get file content preview for a specific result"""
+    db = SessionLocal()
+    try:
+        result = db.query(SearchResult).filter(SearchResult.id == result_id).first()
+        if not result:
+            raise HTTPException(status_code=404, detail="Result not found")
+        
+        # Handle files inside archives
+        if result.is_zip_file:
+            return {
+                "content": f"Preview not available for files inside archives.\n\nArchive: {result.zip_parent_path}\nFile: {result.file_path}\n\nTo view this file, extract the archive first.",
+                "file_type": result.file_type,
+                "is_binary": False,
+                "truncated": False
+            }
+        
+        # Construct full file path
+        # The file_path in DB is already the local path (e.g., /Users/vndr/...)
+        # We need to convert it to the Docker mounted path
+        base_path = "/app/host_root"
+        file_path_str = result.file_path
+        
+        # If path doesn't start with /, add it
+        if not file_path_str.startswith('/'):
+            file_path_str = '/' + file_path_str
+        
+        full_path = Path(base_path + file_path_str)
+        
+        print(f"DEBUG: Attempting to read file:")
+        print(f"  - Result ID: {result_id}")
+        print(f"  - DB file_path: {result.file_path}")
+        print(f"  - Full path: {full_path}")
+        print(f"  - Exists: {full_path.exists()}")
+        
+        if not full_path.exists():
+            # Try alternative: maybe the path is already absolute in container
+            alt_path = Path(file_path_str)
+            print(f"  - Alternative path: {alt_path}")
+            print(f"  - Alternative exists: {alt_path.exists()}")
+            
+            if alt_path.exists():
+                full_path = alt_path
+            else:
+                return {
+                    "content": f"File not found on disk.\n\nSearched paths:\n1. {full_path}\n2. {alt_path}\n\nThe file may have been moved or deleted since the search.\n\nOriginal path from search: {result.file_path}",
+                    "file_type": result.file_type,
+                    "is_binary": False,
+                    "truncated": False
+                }
+        
+        # Check if file is too large (limit to 10MB for preview)
+        file_size = full_path.stat().st_size
+        if file_size > 10 * 1024 * 1024:
+            return {
+                "content": f"File is too large to preview ({file_size:,} bytes).\n\nMaximum preview size: 10 MB",
+                "file_type": result.file_type,
+                "is_binary": False,
+                "truncated": True,
+                "file_size": file_size
+            }
+        
+        file_ext = full_path.suffix.lower()
+        
+        # Handle different file types
+        try:
+            # Text files
+            if file_ext in {'.txt', '.log', '.md', '.py', '.js', '.ts', '.html', '.css', 
+                           '.json', '.xml', '.yml', '.yaml', '.ini', '.cfg', '.conf',
+                           '.sh', '.bash', '.sql', '.csv', '.properties'}:
+                with open(full_path, 'r', encoding='utf-8', errors='ignore') as f:
+                    lines = f.readlines()
+                    truncated = len(lines) > max_lines
+                    content = ''.join(lines[:max_lines])
+                    if truncated:
+                        content += f"\n\n... (showing first {max_lines} of {len(lines)} lines)"
+                    
+                    return {
+                        "content": content,
+                        "file_type": file_ext,
+                        "is_binary": False,
+                        "truncated": truncated,
+                        "total_lines": len(lines)
+                    }
+            
+            # PDF files - extract text using PyPDF2
+            elif file_ext == '.pdf' and PdfReader:
+                try:
+                    reader = PdfReader(str(full_path))
+                    pages_text = []
+                    total_pages = len(reader.pages)
+                    
+                    for page_num, page in enumerate(reader.pages, start=1):
+                        try:
+                            text = page.extract_text()
+                            if text.strip():
+                                pages_text.append(f"--- Page {page_num} ---\n{text}")
+                        except Exception as e:
+                            pages_text.append(f"--- Page {page_num} ---\nError extracting page: {str(e)}")
+                    
+                    # Join all pages and split into lines for truncation
+                    full_text = '\n\n'.join(pages_text)
+                    lines = full_text.split('\n')
+                    truncated = len(lines) > max_lines
+                    content = '\n'.join(lines[:max_lines])
+                    
+                    if truncated:
+                        content += f"\n\n... (showing first {max_lines} of {len(lines)} lines from {total_pages} pages)"
+                    
+                    return {
+                        "content": content,
+                        "file_type": file_ext,
+                        "is_binary": False,
+                        "truncated": truncated,
+                        "total_pages": total_pages,
+                        "total_lines": len(lines)
+                    }
+                except Exception as e:
+                    return {
+                        "content": f"Error reading PDF file: {str(e)}\n\nFilename: {full_path.name}\nSize: {file_size:,} bytes",
+                        "file_type": file_ext,
+                        "is_binary": True,
+                        "truncated": False
+                    }
+            
+            # PDF files without PyPDF2 library
+            elif file_ext == '.pdf':
+                return {
+                    "content": f"PDF Preview:\n\nFilename: {full_path.name}\nSize: {file_size:,} bytes\n\n⚠️ PyPDF2 library not installed.\nInstall it to enable PDF text extraction.",
+                    "file_type": file_ext,
+                    "is_binary": True,
+                    "truncated": False
+                }
+            
+            # DOCX files
+            elif file_ext in {'.docx', '.doc'} and DocxDocument:
+                try:
+                    doc = DocxDocument(str(full_path))
+                    paragraphs = [p.text for p in doc.paragraphs if p.text.strip()]
+                    truncated = len(paragraphs) > max_lines
+                    content = '\n'.join(paragraphs[:max_lines])
+                    if truncated:
+                        content += f"\n\n... (showing first {max_lines} of {len(paragraphs)} paragraphs)"
+                    
+                    return {
+                        "content": content,
+                        "file_type": file_ext,
+                        "is_binary": False,
+                        "truncated": truncated,
+                        "total_paragraphs": len(paragraphs)
+                    }
+                except Exception as e:
+                    return {
+                        "content": f"Error reading DOCX file: {str(e)}",
+                        "file_type": file_ext,
+                        "is_binary": True,
+                        "truncated": False
+                    }
+            
+            # XLSX files
+            elif file_ext in {'.xlsx', '.xls'} and load_workbook:
+                try:
+                    workbook = load_workbook(str(full_path), read_only=True, data_only=True)
+                    content_parts = []
+                    
+                    for sheet in workbook.worksheets[:5]:  # Limit to first 5 sheets
+                        content_parts.append(f"\n=== Sheet: {sheet.title} ===\n")
+                        row_count = 0
+                        for row in sheet.iter_rows(values_only=True):
+                            if row_count >= max_lines:
+                                content_parts.append(f"\n... (showing first {max_lines} rows)")
+                                break
+                            row_text = '\t'.join([str(cell) if cell is not None else '' for cell in row])
+                            if row_text.strip():
+                                content_parts.append(row_text)
+                                row_count += 1
+                    
+                    workbook.close()
+                    
+                    return {
+                        "content": '\n'.join(content_parts),
+                        "file_type": file_ext,
+                        "is_binary": False,
+                        "truncated": row_count >= max_lines
+                    }
+                except Exception as e:
+                    return {
+                        "content": f"Error reading Excel file: {str(e)}",
+                        "file_type": file_ext,
+                        "is_binary": True,
+                        "truncated": False
+                    }
+            
+            # PPTX files
+            elif file_ext in {'.pptx', '.ppt'} and Presentation:
+                try:
+                    prs = Presentation(str(full_path))
+                    content_parts = []
+                    
+                    for idx, slide in enumerate(prs.slides[:20], 1):  # Limit to first 20 slides
+                        content_parts.append(f"\n=== Slide {idx} ===\n")
+                        for shape in slide.shapes:
+                            if hasattr(shape, "text") and shape.text.strip():
+                                content_parts.append(shape.text)
+                    
+                    return {
+                        "content": '\n'.join(content_parts),
+                        "file_type": file_ext,
+                        "is_binary": False,
+                        "truncated": len(prs.slides) > 20,
+                        "total_slides": len(prs.slides)
+                    }
+                except Exception as e:
+                    return {
+                        "content": f"Error reading PowerPoint file: {str(e)}",
+                        "file_type": file_ext,
+                        "is_binary": True,
+                        "truncated": False
+                    }
+            
+            # Image files
+            elif file_ext in {'.jpg', '.jpeg', '.png', '.gif', '.bmp', '.svg', '.ico'}:
+                return {
+                    "content": f"🖼️ Image File\n\nFilename: {full_path.name}\nType: {file_ext}\nSize: {file_size:,} bytes\n\n⚠️ Image preview not available in text mode.\nDownload the file to view.",
+                    "file_type": file_ext,
+                    "is_binary": True,
+                    "truncated": False
+                }
+            
+            # Binary files
+            else:
+                return {
+                    "content": f"Binary file: {full_path.name}\n\nType: {file_ext}\nSize: {file_size:,} bytes\n\n⚠️ Binary file preview not available.\nThis appears to be a binary file type.",
+                    "file_type": file_ext,
+                    "is_binary": True,
+                    "truncated": False
+                }
+                
+        except Exception as e:
+            print(f"ERROR reading file: {str(e)}")
+            import traceback
+            traceback.print_exc()
+            return {
+                "content": f"Error reading file: {str(e)}\n\nFile path: {result.file_path}\nFull path: {full_path}",
+                "file_type": result.file_type,
+                "is_binary": False,
+                "truncated": False
+            }
+    
+    except Exception as e:
+        print(f"ERROR in preview endpoint: {str(e)}")
+        import traceback
+        traceback.print_exc()
+        db.close()
+        # Return error as content instead of raising exception
+        return {
+            "content": f"Error loading preview: {str(e)}\n\nPlease check the backend logs for more details.",
+            "file_type": "error",
+            "is_binary": False,
+            "truncated": False
+        }
+    
     finally:
         db.close()
 
