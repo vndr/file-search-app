@@ -39,7 +39,6 @@ import {
   Schedule,
   FindInPage,
   Close as CloseIcon,
-  Info as InfoIcon,
   Visibility as VisibilityIcon,
   InsertDriveFile as FileIcon,
 } from '@mui/icons-material';
