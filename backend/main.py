@@ -1344,33 +1344,33 @@ async def list_directories(path: str = "/"):
         # This pattern breaks the taint chain for CodeQL
         validated_path = validate_and_resolve_path(path, host_root)
         
-        # Reconstruct path from safe components to break taint flow
-        # This ensures CodeQL sees the path as untainted after validation
-        safe_validated_path = os.path.join(base_path_str, os.path.relpath(validated_path, base_path_str))
+        # Use the validated path directly; it is canonical and checked
+        # All further filesystem operations use this now-untainted path
         
-        if not os.path.isdir(safe_validated_path):
+        if not os.path.isdir(validated_path):
             raise HTTPException(status_code=400, detail="Path is not a directory")
         
         # List subdirectories
         directories = []
         try:
-            for item_name in sorted(os.listdir(safe_validated_path)):
+            for item_name in sorted(os.listdir(validated_path)):
                 if os.sep in item_name or '/' in item_name or '\\' in item_name:
                     continue
                     
-                item_path = os.path.join(safe_validated_path, item_name)
-                # Verify item_path is still within base_path
-                item_normalized = os.path.normpath(item_path)
-                if not item_normalized.startswith(base_path_str + os.sep):
+                item_path = os.path.join(validated_path, item_name)
+                # Verify item_path is still within validated_path root using realpath containment
+                item_real = os.path.realpath(item_path)
+                base_real = os.path.realpath(validated_path)
+                if os.path.commonpath([item_real, base_real]) != base_real:
                     continue
                     
-                if os.path.isdir(item_normalized):
+                if os.path.isdir(item_real):
                     # Check for read permission
-                    if os.access(item_normalized, os.R_OK):
+                    if os.access(item_real, os.R_OK):
                         directories.append({
                             "name": item_name,
-                            "path": item_normalized,
-                            "display_path": item_normalized.replace("/app/host_root", "")
+                            "path": item_real,
+                            "display_path": item_real.replace("/app/host_root", "")
                         })
         except (PermissionError, OSError) as e:
             print(f"Error listing directory contents: {e}")
