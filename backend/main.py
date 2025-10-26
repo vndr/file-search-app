@@ -1165,6 +1165,75 @@ async def get_file_preview(result_id: int, max_lines: int = 100):
     finally:
         db.close()
 
+@app.get("/filesystem/directories")
+async def list_directories(path: str = "/"):
+    """
+    List directories at the specified path for directory browser.
+    Returns subdirectories only (not files).
+    """
+    try:
+        # Security: Validate and normalize the path
+        host_root = Path("/app/host_root")
+        
+        # Convert the path to absolute and resolve it
+        if path.startswith("/app/host_root"):
+            full_path = Path(path)
+        else:
+            # Treat as a path relative to host_root
+            if path.startswith("/"):
+                path = path[1:]
+            full_path = host_root / path
+        
+        # Resolve to absolute path and check it's within host_root
+        full_path = full_path.resolve()
+        host_root_resolved = host_root.resolve()
+        
+        if not str(full_path).startswith(str(host_root_resolved)):
+            raise HTTPException(status_code=403, detail="Access denied: Path outside allowed directory")
+        
+        # Check if path exists and is a directory
+        if not full_path.exists():
+            raise HTTPException(status_code=404, detail="Path not found")
+        
+        if not full_path.is_dir():
+            raise HTTPException(status_code=400, detail="Path is not a directory")
+        
+        # List subdirectories
+        directories = []
+        try:
+            for item in sorted(full_path.iterdir()):
+                if item.is_dir():
+                    # Check for read permission
+                    if os.access(item, os.R_OK):
+                        directories.append({
+                            "name": item.name,
+                            "path": str(item),
+                            "display_path": str(item).replace("/app/host_root", "")
+                        })
+        except PermissionError:
+            pass  # Skip directories we can't read
+        
+        # Get parent directory info
+        parent_path = None
+        if full_path != host_root_resolved:
+            parent = full_path.parent
+            if str(parent).startswith(str(host_root_resolved)):
+                parent_path = str(parent).replace("/app/host_root", "")
+        
+        return {
+            "current_path": str(full_path).replace("/app/host_root", ""),
+            "parent_path": parent_path,
+            "directories": directories
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        print(f"ERROR listing directories: {str(e)}")
+        import traceback
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=f"Error listing directories: {str(e)}")
+
 @app.get("/health")
 async def health_check():
     """Health check endpoint"""

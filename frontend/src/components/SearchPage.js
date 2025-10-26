@@ -16,17 +16,23 @@ import {
   List,
   ListItem,
   ListItemText,
+  ListItemButton,
+  ListItemIcon,
   Dialog,
   DialogTitle,
   DialogContent,
   DialogActions,
   DialogContentText,
   IconButton,
+  Divider,
+  CircularProgress,
 } from '@mui/material';
 import { 
   Search as SearchIcon, 
   History as HistoryIcon, 
   Folder as FolderIcon,
+  FolderOpen as FolderOpenIcon,
+  ArrowUpward as ArrowUpIcon,
   CheckCircle as CheckCircleIcon,
   Warning as WarningIcon,
   Close as CloseIcon 
@@ -51,6 +57,10 @@ function SearchPage() {
   const [error, setError] = useState('');
   const [showCompletionModal, setShowCompletionModal] = useState(false);
   const [searchResults, setSearchResults] = useState(null);
+  const [showDirectoryBrowser, setShowDirectoryBrowser] = useState(false);
+  const [currentBrowsePath, setCurrentBrowsePath] = useState('/Users/vndr');
+  const [directories, setDirectories] = useState([]);
+  const [loadingDirs, setLoadingDirs] = useState(false);
   const wsRef = useRef(null);
 
   useEffect(() => {
@@ -64,6 +74,47 @@ function SearchPage() {
     } catch (error) {
       console.error('Error fetching search history:', error);
     }
+  };
+
+  const fetchDirectories = async (path) => {
+    setLoadingDirs(true);
+    try {
+      const response = await axios.get(`${API_BASE_URL}/filesystem/directories`, {
+        params: { path }
+      });
+      setDirectories(response.data.directories);
+      setCurrentBrowsePath(response.data.current_path);
+      return response.data;
+    } catch (error) {
+      console.error('Error fetching directories:', error);
+      setError('Error loading directories: ' + (error.response?.data?.detail || error.message));
+      return null;
+    } finally {
+      setLoadingDirs(false);
+    }
+  };
+
+  const handleOpenDirectoryBrowser = async () => {
+    setShowDirectoryBrowser(true);
+    await fetchDirectories(searchPath);
+  };
+
+  const handleCloseDirectoryBrowser = () => {
+    setShowDirectoryBrowser(false);
+  };
+
+  const handleSelectDirectory = () => {
+    setSearchPath(currentBrowsePath);
+    setShowDirectoryBrowser(false);
+  };
+
+  const handleNavigateToDirectory = async (path) => {
+    await fetchDirectories(path);
+  };
+
+  const handleNavigateUp = async () => {
+    const parent = currentBrowsePath.split('/').slice(0, -1).join('/') || '/';
+    await fetchDirectories(parent);
   };
 
   const startSearch = async () => {
@@ -209,11 +260,7 @@ function SearchPage() {
                   endAdornment: (
                     <IconButton 
                       edge="end" 
-                      onClick={() => {
-                        const paths = getCommonPaths();
-                        const pathList = paths.map(p => `• ${p}`).join('\n');
-                        alert(`Common paths:\n${pathList}\n\nOr enter any custom path on your system.`);
-                      }}
+                      onClick={handleOpenDirectoryBrowser}
                     >
                       <FolderIcon />
                     </IconButton>
@@ -484,6 +531,98 @@ function SearchPage() {
               Try Again
             </Button>
           )}
+        </DialogActions>
+      </Dialog>
+
+      {/* Directory Browser Modal */}
+      <Dialog
+        open={showDirectoryBrowser}
+        onClose={handleCloseDirectoryBrowser}
+        maxWidth="md"
+        fullWidth
+      >
+        <DialogTitle sx={{ display: 'flex', alignItems: 'center', gap: 2 }}>
+          <FolderOpenIcon color="primary" />
+          Browse Directories
+          <IconButton
+            onClick={handleCloseDirectoryBrowser}
+            sx={{ position: 'absolute', right: 8, top: 8 }}
+          >
+            <CloseIcon />
+          </IconButton>
+        </DialogTitle>
+        
+        <DialogContent>
+          <Box sx={{ mb: 2 }}>
+            <Typography variant="body2" color="text.secondary" gutterBottom>
+              Current Path:
+            </Typography>
+            <Paper elevation={1} sx={{ p: 1.5, bgcolor: 'grey.50', fontFamily: 'monospace' }}>
+              {currentBrowsePath || '/'}
+            </Paper>
+          </Box>
+
+          {loadingDirs ? (
+            <Box sx={{ display: 'flex', justifyContent: 'center', p: 4 }}>
+              <CircularProgress />
+            </Box>
+          ) : (
+            <>
+              {currentBrowsePath !== '/' && currentBrowsePath !== '' && (
+                <>
+                  <ListItemButton onClick={handleNavigateUp}>
+                    <ListItemIcon>
+                      <ArrowUpIcon />
+                    </ListItemIcon>
+                    <ListItemText 
+                      primary=".. (Parent Directory)"
+                      secondary="Go up one level"
+                    />
+                  </ListItemButton>
+                  <Divider />
+                </>
+              )}
+
+              <List sx={{ maxHeight: 400, overflow: 'auto' }}>
+                {directories.length === 0 ? (
+                  <ListItem>
+                    <ListItemText 
+                      primary="No subdirectories found"
+                      secondary="This directory is empty or contains only files"
+                    />
+                  </ListItem>
+                ) : (
+                  directories.map((dir) => (
+                    <ListItemButton
+                      key={dir.path}
+                      onClick={() => handleNavigateToDirectory(dir.path)}
+                    >
+                      <ListItemIcon>
+                        <FolderIcon color="primary" />
+                      </ListItemIcon>
+                      <ListItemText 
+                        primary={dir.name}
+                        secondary={dir.display_path}
+                      />
+                    </ListItemButton>
+                  ))
+                )}
+              </List>
+            </>
+          )}
+        </DialogContent>
+        
+        <DialogActions sx={{ p: 3 }}>
+          <Button onClick={handleCloseDirectoryBrowser} color="inherit">
+            Cancel
+          </Button>
+          <Button 
+            onClick={handleSelectDirectory} 
+            variant="contained" 
+            startIcon={<CheckCircleIcon />}
+          >
+            Select This Directory
+          </Button>
         </DialogActions>
       </Dialog>
     </Box>
