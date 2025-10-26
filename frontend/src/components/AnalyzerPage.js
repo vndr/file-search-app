@@ -335,7 +335,7 @@ function AnalyzerPage() {
         )}
 
         {/* Analysis Options */}
-        <Paper sx={{ p: 2, mb: 3, bgcolor: 'grey.50' }}>
+        <Paper sx={{ p: 2, mb: 3, bgcolor: 'action.hover' }}>
           <Typography variant="subtitle2" gutterBottom>
             Analysis Options
           </Typography>

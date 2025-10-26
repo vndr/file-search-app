@@ -393,7 +393,7 @@ function ResultsPage() {
                           {match.context_before && (
                             <Box mb={1}>
                               <Typography variant="caption" color="text.secondary">Context Before:</Typography>
-                              <Box sx={{ bgcolor: 'grey.100', p: 1, borderRadius: 1, fontFamily: 'monospace' }}>
+                              <Box sx={{ bgcolor: 'action.hover', p: 1, borderRadius: 1, fontFamily: 'monospace' }}>
                                 <pre style={{ margin: 0, whiteSpace: 'pre-wrap' }}>
                                   {match.context_before}
                                 </pre>
@@ -413,7 +413,7 @@ function ResultsPage() {
                           {match.context_after && (
                             <Box>
                               <Typography variant="caption" color="text.secondary">Context After:</Typography>
-                              <Box sx={{ bgcolor: 'grey.100', p: 1, borderRadius: 1, fontFamily: 'monospace' }}>
+                              <Box sx={{ bgcolor: 'action.hover', p: 1, borderRadius: 1, fontFamily: 'monospace' }}>
                                 <pre style={{ margin: 0, whiteSpace: 'pre-wrap' }}>
                                   {match.context_after}
                                 </pre>
@@ -542,7 +542,7 @@ function ResultsPage() {
                   
                   <Box 
                     sx={{ 
-                      bgcolor: 'grey.100', 
+                      bgcolor: 'action.hover', 
                       p: 2, 
                       borderRadius: 1, 
                       maxHeight: 400, 
