@@ -117,7 +117,11 @@ def validate_and_resolve_path(user_path: str, base_path: Path) -> str:
     
     # Verify normalized path starts with base_path (prefix check)
     # This is the critical security check
-    if not normalized_path.startswith(base_path_str + os.sep) and normalized_path != base_path_str:
+    # Use os.path.commonpath for safe containment check
+    # This is more robust than string-based startswith and works against symlink and unicode edge cases
+    base_real = os.path.realpath(base_path_str)
+    normalized_real = os.path.realpath(normalized_path)
+    if os.path.commonpath([normalized_real, base_real]) != base_real:
         raise HTTPException(
             status_code=403,
             detail="Access denied: Path outside allowed directory"
