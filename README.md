@@ -9,16 +9,35 @@ A powerful web-based file search application that can search for text patterns a
 
 ## 🌟 Features
 
+### Core Functionality
 - **Deep File Search**: Search across all files in directories and subdirectories
+- **Directory Analysis**: Comprehensive directory statistics, file type distribution, and size analysis
 - **Archive Support**: Search inside ZIP, TAR, TAR.GZ, TAR.BZ2, and TGZ files
 - **Document Search**: Search in Microsoft Office (DOCX, XLSX, PPTX) and LibreOffice (ODT, ODS, ODP) documents
+- **Duplicate Detection**: Find duplicate files using fast MD5 hashing algorithm
 - **Real-time Progress**: Live updates during search with WebSocket connection
+
+### New Features ✨
+- **🎨 Dark Mode**: Toggle between light and dark themes with persistent preference
+- **📊 CSV Export**: Export analysis results (file lists, duplicates, statistics) to CSV format
+- **📏 File Size Filtering**: Filter files by size range in both analysis and search results
+- **💾 Saved Configurations**: Save and load frequently used search and analysis configurations
+- **🗑️ Empty Directory Cleanup**: Detect and batch delete empty directories safely
+
+### User Interface
 - **Modern Web UI**: Clean, responsive interface built with React and Material-UI
-- **Search History**: Track and revisit previous searches
+- **Interactive Charts**: Visual file type distribution and size charts with Recharts
+- **Search History**: Track and revisit previous searches with full session management
 - **Detailed Results**: View match context, line numbers, and file details
-- **Filter & Navigate**: Filter results and click through matches
-- **Database Storage**: Persistent storage of search results and history
-- **Timer Tracking**: Monitor search duration and performance
+- **Filter & Navigate**: Filter results in real-time and click through matches
+- **Smart Navigation**: Breadcrumb navigation and quick access buttons
+
+### Performance & Storage
+- **Database Storage**: Persistent storage of search results and history in PostgreSQL
+- **Parallel Processing**: Multi-threaded file processing for optimal performance
+- **Smart Filtering**: Automatic binary file detection and hidden directory exclusion
+- **Memory Efficient**: Streaming file operations for large file handling
+- **Timer Tracking**: Monitor search duration and performance metrics
 
 ## 🏗️ Architecture
 
@@ -91,37 +110,81 @@ docker-compose up --build -d
 
 ## 🖥️ Usage
 
-### Basic Search
+### Quick Start
 
 1. **Open the Web Interface**: Go to http://localhost:3000
-2. **Enter Search Term**: Type what you're looking for (e.g., "John Doe")
-3. **Choose Search Path**: Select any directory on your Mac using the path selector or quick buttons
-4. **Configure Options**:
+2. **Choose Your Task**:
+   - **Analyze Directory**: Get comprehensive directory statistics
+   - **Search Files**: Find text patterns across files
+
+### Directory Analysis
+
+1. **Select a Directory**: Use the path selector or quick buttons (Desktop, Documents, Downloads)
+2. **Configure Options**:
+   - **Find Duplicates**: Enable to detect duplicate files (uses MD5 hashing)
+   - **Max Hash Size**: Only hash files smaller than this size (1-100 MB)
+   - **File Size Filter**: Set min/max file size to narrow analysis scope
+3. **Start Analysis**: Click "Analyze" and watch real-time progress
+4. **View Results**: 
+   - Summary statistics (files, directories, total size)
+   - Interactive charts (file types, size distribution)
+   - Top 10 largest files
+   - Duplicate file groups with space savings
+   - Empty directories list
+5. **Export Results**: Download file lists, duplicates, or statistics as CSV
+6. **Clean Up**: Batch delete empty directories if found
+
+### Text Search
+
+1. **Enter Search Term**: Type what you're looking for
+2. **Choose Search Path**: Select any directory on your Mac
+3. **Configure Options**:
    - **Case Sensitive**: Toggle for exact case matching
    - **Include ZIP Files**: Enable to search inside compressed files
-5. **Start Search**: Click the search button and watch real-time progress
-6. **Completion Summary**: View the search completion modal with results summary
-7. **View Results**: Browse through found files and click to see match details (if matches found)
+   - **Search Filenames**: Include filename matching
+4. **Start Search**: Click search and watch real-time progress
+5. **View Results**: Browse found files and click to see match details
+6. **Filter Results**: Use search box and file size filters to narrow results
 
-### Advanced Features
+### Additional Features
 
-- **Filter Results**: Use the search box in results to filter by filename or content
-- **View Match Context**: Click on any result to see surrounding code/text
-- **Search History**: Access previous searches from the sidebar or history page
-- **Copy File Paths**: Click the copy icon to copy file paths to clipboard
+- **Dark Mode**: Toggle theme using the icon in the top-right corner
+- **Save Configurations**: Save your frequently used settings for quick access
+- **Search History**: Access previous searches from the History page
+- **Copy File Paths**: Click copy icon to copy paths to clipboard
 
 ## 🔧 Configuration
 
 ### Search Directory
 
-By default, the application searches your `/Users/vndr` directory. To change this:
+By default, the application searches your entire file system starting from `/`. To change this:
 
 1. Edit `docker-compose.yml`
 2. Modify the volume mount in the backend service:
    ```yaml
    volumes:
-     - /your/custom/path:/app/search_root:ro
+     - /your/custom/path:/app/host_root:rw
    ```
+   Note: Use `:rw` for read-write access (required for empty directory deletion) or `:ro` for read-only.
+
+### Analysis Options
+
+**Duplicate Detection**:
+- Enable/disable via checkbox
+- Adjustable max hash size (1-100 MB)
+- Uses MD5 hashing for content comparison
+
+**File Size Filtering**:
+- Set minimum file size in bytes
+- Set maximum file size in bytes
+- Use preset buttons for common sizes
+- Filters applied during analysis for better performance
+
+**Performance Tuning**:
+- Disable duplicates for 10x faster analysis
+- Reduce max hash size for speed
+- Use file size filters to limit scope
+- Hidden directories (.git, .cache, etc.) automatically excluded
 
 ### Supported File Types
 
@@ -161,14 +224,29 @@ The application consists of three main services:
 
 The backend provides a REST API with the following endpoints:
 
+### Health & Status
 - `GET /health` - Health check
+
+### Search Operations
 - `POST /search` - Start a new search
-- `WS /ws/search` - WebSocket for real-time search
+- `WS /ws/search` - WebSocket for real-time search updates
 - `GET /sessions` - List all search sessions
 - `GET /sessions/{id}` - Get specific session details
 - `GET /sessions/{id}/results` - Get search results
-- `GET /results/{id}/matches` - Get match details
+- `GET /results/{id}/matches` - Get match details for a result
+- `GET /results/{id}/preview` - Get file preview
 - `DELETE /sessions/{id}` - Delete a search session
+
+### Analysis Operations
+- `POST /api/analyze-directory` - Analyze a directory
+- `POST /api/stop-analysis` - Stop ongoing analysis
+- `GET /api/export-csv` - Export results to CSV (file_list, duplicates, file_types)
+- `POST /api/delete-empty-directories` - Delete empty directories
+
+### Configuration Management
+- `GET /api/saved-searches` - List all saved configurations
+- `POST /api/saved-searches` - Save a new configuration
+- `DELETE /api/saved-searches/{id}` - Delete a saved configuration
 
 ## 🛠️ Development
 
@@ -283,10 +361,16 @@ file-search-app/
 │   ├── public/
 │   └── src/
 │       ├── App.js           # Main React component
+│       ├── ThemeContext.js  # Dark mode theme provider
 │       └── components/      # React components
-│           ├── SearchPage.js
-│           ├── ResultsPage.js
-│           └── HistoryPage.js
+│           ├── SearchPage.js       # Text search interface
+│           ├── ResultsPage.js      # Search results display
+│           ├── HistoryPage.js      # Search history
+│           └── AnalyzerPage.js     # Directory analysis
+├── docs/                    # Documentation
+│   ├── USER_GUIDE.md       # Comprehensive user guide
+│   ├── FEATURES.md         # Detailed feature documentation
+│   └── QUICK_START.md      # Quick start guide
 ├── docker-compose.yml       # Multi-container setup
 ├── init.sql                 # Database initialization
 ├── start.sh                 # Startup script
@@ -294,6 +378,7 @@ file-search-app/
 ├── setup-git.sh             # Git setup helper
 ├── git-push.sh              # Quick push script
 ├── GIT_GUIDE.md            # Git usage guide
+├── GITHUB_ACTIONS.md       # CI/CD documentation
 ├── .gitignore              # Git ignore rules
 └── README.md               # This file
 ```
@@ -332,6 +417,20 @@ git push
 ```
 
 For more detailed Git instructions, see [GIT_GUIDE.md](GIT_GUIDE.md).
+
+## 📚 Documentation
+
+Comprehensive documentation is available in the `docs/` folder:
+
+- **[Quick Start Guide](docs/QUICK_START.md)**: Get up and running in under 5 minutes
+- **[User Guide](docs/USER_GUIDE.md)**: Detailed instructions for all features
+- **[Features Documentation](docs/FEATURES.md)**: Technical details and specifications
+
+### In-App Help
+
+- Look for **(?)** help icons throughout the application
+- Hover over controls for tooltips with quick explanations
+- Access documentation links from the Help menu
 
 ## 🤝 Contributing
 

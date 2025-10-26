@@ -6,7 +6,7 @@ services:
     ports:
       - "8000:8000"
     volumes:
-      - /:/app/host_root:ro # Mount entire file system as read-only
+      - /:/app/host_root:rw # Mount entire file system with read-write access
       - ./backend:/app
     environment:
       - DATABASE_URL=postgresql://postgres:password@db:5432/filesearch

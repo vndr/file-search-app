@@ -106,6 +106,21 @@ class MatchDetail(Base):
     
     result = relationship("SearchResult", back_populates="matches")
 
+class SavedSearch(Base):
+    __tablename__ = "saved_searches"
+    
+    id = Column(Integer, primary_key=True, index=True)
+    name = Column(String(200), nullable=False, unique=True)
+    search_term = Column(String(500), nullable=False)
+    search_path = Column(String(1000), nullable=False)
+    case_sensitive = Column(Boolean, default=False)
+    include_zip_files = Column(Boolean, default=True)
+    search_filenames = Column(Boolean, default=False)
+    file_type = Column(String(100))  # Optional file type filter
+    min_size = Column(BigInteger)  # Optional minimum file size
+    max_size = Column(BigInteger)  # Optional maximum file size
+    created_at = Column(DateTime, default=datetime.utcnow)
+
 # Pydantic models
 class SearchRequest(BaseModel):
     search_term: str
@@ -141,6 +156,30 @@ class MatchDetailResponse(BaseModel):
     match_position: int
     context_before: Optional[str]
     context_after: Optional[str]
+
+class SavedSearchCreate(BaseModel):
+    name: str
+    search_term: str
+    search_path: str = "/Users/vndr"
+    case_sensitive: bool = False
+    include_zip_files: bool = True
+    search_filenames: bool = False
+    file_type: Optional[str] = None
+    min_size: Optional[int] = None
+    max_size: Optional[int] = None
+
+class SavedSearchResponse(BaseModel):
+    id: int
+    name: str
+    search_term: str
+    search_path: str
+    case_sensitive: bool
+    include_zip_files: bool
+    search_filenames: bool
+    file_type: Optional[str]
+    min_size: Optional[int]
+    max_size: Optional[int]
+    created_at: datetime
 
 # File search engine
 class FileSearchEngine:
@@ -1242,7 +1281,7 @@ async def list_directories(path: str = "/"):
         raise HTTPException(status_code=500, detail=f"Error listing directories: {str(e)}")
 
 @app.post("/api/analyze-directory")
-async def analyze_directory(path: str, find_duplicates: bool = True, max_hash_size: int = 10, session_id: str = None):
+async def analyze_directory(path: str, find_duplicates: bool = True, max_hash_size: int = 10, session_id: str = None, min_size: int = None, max_size: int = None):
     """
     Analyze a directory and return comprehensive statistics about its contents.
     Returns file type distribution, size statistics, duplicate files, and detailed file list.
@@ -1252,6 +1291,8 @@ async def analyze_directory(path: str, find_duplicates: bool = True, max_hash_si
     - find_duplicates: Whether to calculate file hashes for duplicate detection (slower)
     - max_hash_size: Maximum file size in MB to hash for duplicates (default: 10MB)
     - session_id: Optional session ID for cancellation support
+    - min_size: Optional minimum file size in bytes to include in analysis
+    - max_size: Optional maximum file size in bytes to include in analysis
     """
     import hashlib
     from collections import defaultdict
@@ -1340,6 +1381,7 @@ async def analyze_directory(path: str, find_duplicates: bool = True, max_hash_si
         total_size = 0
         total_files = 0
         total_dirs = 0
+        empty_dirs = []  # Track empty directories
         
         max_hash_bytes = max_hash_size * 1024 * 1024
         
@@ -1359,6 +1401,16 @@ async def analyze_directory(path: str, find_duplicates: bool = True, max_hash_si
             dirs[:] = [d for d in dirs if not d.startswith('.')]
             total_dirs += len(dirs)
             
+            # Check for empty directories (no files and no subdirectories)
+            if len(files) == 0 and len(dirs) == 0 and root != str(full_path):
+                # This is an empty directory
+                empty_dir_path = str(Path(root)).replace("/app/host_root", "")
+                empty_dirs.append({
+                    "path": empty_dir_path,
+                    "name": Path(root).name,
+                    "parent": str(Path(root).parent).replace("/app/host_root", "")
+                })
+            
             for filename in files:
                 # Check cancellation periodically (every 100 files)
                 if total_files % 100 == 0 and is_cancelled():
@@ -1376,6 +1428,12 @@ async def analyze_directory(path: str, find_duplicates: bool = True, max_hash_si
                     stat = file_path.stat()
                     file_size = stat.st_size
                     modified_time = datetime.fromtimestamp(stat.st_mtime)
+                    
+                    # Apply size filters if specified
+                    if min_size is not None and file_size < min_size:
+                        continue
+                    if max_size is not None and file_size > max_size:
+                        continue
                     
                     # Get file extension and MIME type
                     file_ext = file_path.suffix.lower() or '.no_extension'
@@ -1536,11 +1594,13 @@ async def analyze_directory(path: str, find_duplicates: bool = True, max_hash_si
                 "total_size": total_size,
                 "duplicate_files": sum(d["count"] - 1 for d in duplicates),
                 "wasted_space": duplicate_size,
-                "unique_file_types": len(file_type_counts)
+                "unique_file_types": len(file_type_counts),
+                "empty_directories": len(empty_dirs)
             },
             "file_types": file_types,
             "size_distribution": size_ranges,
             "duplicates": duplicates,
+            "empty_directories": empty_dirs,
             "largest_files": largest_files,
             "all_files": file_list
         }
@@ -1668,6 +1728,191 @@ async def cancel_analysis(session_id: str):
         return {"status": "cancelled", "session_id": session_id}
     else:
         raise HTTPException(status_code=404, detail="Analysis session not found or already completed")
+
+# Saved Searches Endpoints
+@app.get("/api/saved-searches", response_model=List[SavedSearchResponse])
+async def get_saved_searches():
+    """
+    Get all saved searches
+    """
+    db = SessionLocal()
+    try:
+        searches = db.query(SavedSearch).order_by(SavedSearch.created_at.desc()).all()
+        return searches
+    finally:
+        db.close()
+
+@app.post("/api/saved-searches", response_model=SavedSearchResponse)
+async def create_saved_search(search: SavedSearchCreate):
+    """
+    Create a new saved search
+    """
+    db = SessionLocal()
+    try:
+        # Check if name already exists
+        existing = db.query(SavedSearch).filter(SavedSearch.name == search.name).first()
+        if existing:
+            raise HTTPException(status_code=400, detail="A saved search with this name already exists")
+        
+        db_search = SavedSearch(
+            name=search.name,
+            search_term=search.search_term,
+            search_path=search.search_path,
+            case_sensitive=search.case_sensitive,
+            include_zip_files=search.include_zip_files,
+            search_filenames=search.search_filenames,
+            file_type=search.file_type,
+            min_size=search.min_size,
+            max_size=search.max_size
+        )
+        db.add(db_search)
+        db.commit()
+        db.refresh(db_search)
+        return db_search
+    except HTTPException:
+        raise
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(status_code=500, detail=f"Error creating saved search: {str(e)}")
+    finally:
+        db.close()
+
+@app.delete("/api/saved-searches/{search_id}")
+async def delete_saved_search(search_id: int):
+    """
+    Delete a saved search
+    """
+    db = SessionLocal()
+    try:
+        search = db.query(SavedSearch).filter(SavedSearch.id == search_id).first()
+        if not search:
+            raise HTTPException(status_code=404, detail="Saved search not found")
+        
+        db.delete(search)
+        db.commit()
+        return {"status": "success", "message": "Saved search deleted"}
+    except HTTPException:
+        raise
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(status_code=500, detail=f"Error deleting saved search: {str(e)}")
+    finally:
+        db.close()
+
+@app.post("/api/delete-empty-directories")
+async def delete_empty_directories(request: dict):
+    """
+    Delete empty directories safely
+    
+    Request body:
+    {
+        "directories": ["/path/to/dir1", "/path/to/dir2", ...]
+    }
+    
+    Returns:
+    {
+        "deleted": ["/path/to/dir1", ...],
+        "failed": [{"path": "/path/to/dir2", "error": "..."}, ...],
+        "total_deleted": 3,
+        "total_failed": 1
+    }
+    """
+    import shutil
+    
+    directories = request.get("directories", [])
+    print(f"Received request to delete {len(directories)} directories")
+    print(f"Directories: {directories}")
+    
+    if not directories:
+        raise HTTPException(status_code=400, detail="No directories provided")
+    
+    deleted = []
+    failed = []
+    host_root = Path("/app/host_root")
+    
+    for dir_path in directories:
+        try:
+            print(f"Processing directory: {dir_path}")
+            # Security: Validate and normalize the path
+            if dir_path.startswith("/app/host_root"):
+                full_path = Path(dir_path)
+            else:
+                # Treat as a path relative to host_root
+                if dir_path.startswith("/"):
+                    dir_path_clean = dir_path[1:]
+                else:
+                    dir_path_clean = dir_path
+                full_path = host_root / dir_path_clean
+            
+            print(f"Full path resolved to: {full_path}")
+            
+            # Resolve to absolute path and check it's within host_root
+            full_path = full_path.resolve()
+            host_root_resolved = host_root.resolve()
+            
+            print(f"Resolved full path: {full_path}")
+            print(f"Host root resolved: {host_root_resolved}")
+            
+            if not str(full_path).startswith(str(host_root_resolved)):
+                print(f"FAILED: Path outside allowed directory")
+                failed.append({
+                    "path": dir_path,
+                    "error": "Access denied: Path outside allowed directory"
+                })
+                continue
+            
+            # Check if path exists and is a directory
+            if not full_path.exists():
+                print(f"FAILED: Directory does not exist")
+                failed.append({
+                    "path": dir_path,
+                    "error": "Directory does not exist"
+                })
+                continue
+            
+            if not full_path.is_dir():
+                print(f"FAILED: Path is not a directory")
+                failed.append({
+                    "path": dir_path,
+                    "error": "Path is not a directory"
+                })
+                continue
+            
+            # Double-check the directory is actually empty
+            dir_contents = list(full_path.iterdir())
+            if dir_contents:
+                print(f"FAILED: Directory is not empty, contains: {dir_contents}")
+                failed.append({
+                    "path": dir_path,
+                    "error": "Directory is not empty"
+                })
+                continue
+            
+            # Delete the empty directory
+            full_path.rmdir()
+            deleted.append(dir_path)
+            print(f"SUCCESS: Deleted empty directory: {dir_path}")
+            
+        except PermissionError:
+            failed.append({
+                "path": dir_path,
+                "error": "Permission denied"
+            })
+        except Exception as e:
+            failed.append({
+                "path": dir_path,
+                "error": str(e)
+            })
+            print(f"EXCEPTION deleting {dir_path}: {e}")
+    
+    result = {
+        "deleted": deleted,
+        "failed": failed,
+        "total_deleted": len(deleted),
+        "total_failed": len(failed)
+    }
+    print(f"Delete operation complete: {result}")
+    return result
 
 @app.get("/health")
 async def health_check():

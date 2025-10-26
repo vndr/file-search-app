@@ -55,6 +55,8 @@ function ResultsPage() {
   const [results, setResults] = useState([]);
   const [filteredResults, setFilteredResults] = useState([]);
   const [searchFilter, setSearchFilter] = useState('');
+  const [minFileSize, setMinFileSize] = useState(null); // In bytes, null means no filter
+  const [maxFileSize, setMaxFileSize] = useState(null); // In bytes, null means no filter
   const [selectedResult, setSelectedResult] = useState(null);
   const [matchDetails, setMatchDetails] = useState([]);
   const [showDetailsDialog, setShowDetailsDialog] = useState(false);
@@ -88,18 +90,28 @@ function ResultsPage() {
   }, [sessionId]);
 
   const filterResults = useCallback(() => {
-    if (!searchFilter.trim()) {
-      setFilteredResults(results);
-    } else {
-      const filtered = results.filter(result =>
+    let filtered = results;
+    
+    // Apply text search filter
+    if (searchFilter.trim()) {
+      filtered = filtered.filter(result =>
         result.file_name.toLowerCase().includes(searchFilter.toLowerCase()) ||
         result.file_path.toLowerCase().includes(searchFilter.toLowerCase()) ||
         (result.preview_text && result.preview_text.toLowerCase().includes(searchFilter.toLowerCase()))
       );
-      setFilteredResults(filtered);
     }
+    
+    // Apply file size filters
+    if (minFileSize !== null) {
+      filtered = filtered.filter(result => result.file_size >= minFileSize);
+    }
+    if (maxFileSize !== null) {
+      filtered = filtered.filter(result => result.file_size <= maxFileSize);
+    }
+    
+    setFilteredResults(filtered);
     setPage(1); // Reset to first page when filtering
-  }, [results, searchFilter]);
+  }, [results, searchFilter, minFileSize, maxFileSize]);
 
   useEffect(() => {
     fetchSessionData();
@@ -108,7 +120,7 @@ function ResultsPage() {
 
   useEffect(() => {
     filterResults();
-  }, [results, searchFilter, filterResults]);
+  }, [results, searchFilter, minFileSize, maxFileSize, filterResults]);
 
   const fetchMatchDetails = async (resultId) => {
     try {
@@ -250,7 +262,7 @@ function ResultsPage() {
         {/* Results List */}
         <Grid item xs={12} md={selectedResult ? 6 : 12}>
           <Paper elevation={2} sx={{ p: 3 }}>
-            <Box display="flex" justifyContent="space-between" alignItems="center" mb={3}>
+            <Box display="flex" justifyContent="space-between" alignItems="center" mb={2}>
               <Typography variant="h6">
                 Results ({filteredResults.length})
               </Typography>
@@ -269,6 +281,71 @@ function ResultsPage() {
                 sx={{ width: 300 }}
               />
             </Box>
+            
+            {/* File Size Filter */}
+            <Accordion sx={{ mb: 2, bgcolor: 'action.hover' }}>
+              <AccordionSummary expandIcon={<ExpandMore />}>
+                <Typography variant="subtitle2">
+                  File Size Filter
+                  {(minFileSize !== null || maxFileSize !== null) && (
+                    <Chip 
+                      label="Active" 
+                      size="small" 
+                      color="primary" 
+                      sx={{ ml: 1 }}
+                    />
+                  )}
+                </Typography>
+              </AccordionSummary>
+              <AccordionDetails>
+                <Grid container spacing={2}>
+                  <Grid item xs={12} md={6}>
+                    <TextField
+                      label="Minimum File Size"
+                      type="number"
+                      value={minFileSize !== null ? minFileSize : ''}
+                      onChange={(e) => setMinFileSize(e.target.value ? parseInt(e.target.value) : null)}
+                      fullWidth
+                      size="small"
+                      helperText="Leave empty for no minimum"
+                      InputProps={{
+                        endAdornment: <Typography variant="caption">bytes</Typography>
+                      }}
+                    />
+                    <Box sx={{ mt: 1, display: 'flex', gap: 0.5, flexWrap: 'wrap' }}>
+                      <Chip label="Clear" size="small" onClick={() => setMinFileSize(null)} />
+                      <Chip label="1 KB" size="small" onClick={() => setMinFileSize(1024)} />
+                      <Chip label="10 KB" size="small" onClick={() => setMinFileSize(10240)} />
+                      <Chip label="100 KB" size="small" onClick={() => setMinFileSize(102400)} />
+                      <Chip label="1 MB" size="small" onClick={() => setMinFileSize(1048576)} />
+                      <Chip label="10 MB" size="small" onClick={() => setMinFileSize(10485760)} />
+                    </Box>
+                  </Grid>
+                  <Grid item xs={12} md={6}>
+                    <TextField
+                      label="Maximum File Size"
+                      type="number"
+                      value={maxFileSize !== null ? maxFileSize : ''}
+                      onChange={(e) => setMaxFileSize(e.target.value ? parseInt(e.target.value) : null)}
+                      fullWidth
+                      size="small"
+                      helperText="Leave empty for no maximum"
+                      InputProps={{
+                        endAdornment: <Typography variant="caption">bytes</Typography>
+                      }}
+                    />
+                    <Box sx={{ mt: 1, display: 'flex', gap: 0.5, flexWrap: 'wrap' }}>
+                      <Chip label="Clear" size="small" onClick={() => setMaxFileSize(null)} />
+                      <Chip label="100 KB" size="small" onClick={() => setMaxFileSize(102400)} />
+                      <Chip label="1 MB" size="small" onClick={() => setMaxFileSize(1048576)} />
+                      <Chip label="10 MB" size="small" onClick={() => setMaxFileSize(10485760)} />
+                      <Chip label="100 MB" size="small" onClick={() => setMaxFileSize(104857600)} />
+                      <Chip label="1 GB" size="small" onClick={() => setMaxFileSize(1073741824)} />
+                    </Box>
+                  </Grid>
+                </Grid>
+              </AccordionDetails>
+            </Accordion>
 
             {paginatedResults.length === 0 ? (
               <Typography color="text.secondary">No results found.</Typography>

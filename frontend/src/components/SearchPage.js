@@ -26,6 +26,9 @@ import {
   IconButton,
   Divider,
   CircularProgress,
+  Menu,
+  MenuItem,
+  Tooltip,
 } from '@mui/material';
 import { 
   Search as SearchIcon, 
@@ -35,7 +38,10 @@ import {
   ArrowUpward as ArrowUpIcon,
   CheckCircle as CheckCircleIcon,
   Warning as WarningIcon,
-  Close as CloseIcon 
+  Close as CloseIcon,
+  BookmarkAdd as BookmarkAddIcon,
+  Bookmarks as BookmarksIcon,
+  Delete as DeleteIcon,
 } from '@mui/icons-material';
 import axios from 'axios';
 
@@ -63,9 +69,68 @@ function SearchPage() {
   const [loadingDirs, setLoadingDirs] = useState(false);
   const wsRef = useRef(null);
 
+  // Saved searches state
+  const [savedSearches, setSavedSearches] = useState([]);
+  const [showSaveDialog, setShowSaveDialog] = useState(false);
+  const [saveSearchName, setSaveSearchName] = useState('');
+  const [savedSearchesAnchor, setSavedSearchesAnchor] = useState(null);
+
   useEffect(() => {
     fetchSearchHistory();
+    fetchSavedSearches();
   }, []);
+
+  const fetchSavedSearches = async () => {
+    try {
+      const response = await axios.get(`${API_BASE_URL}/api/saved-searches`);
+      setSavedSearches(response.data);
+    } catch (error) {
+      console.error('Error fetching saved searches:', error);
+    }
+  };
+
+  const handleSaveSearch = async () => {
+    if (!saveSearchName.trim()) {
+      setError('Please enter a name for the saved search');
+      return;
+    }
+
+    try {
+      await axios.post(`${API_BASE_URL}/api/saved-searches`, {
+        name: saveSearchName,
+        search_term: searchTerm,
+        search_path: searchPath,
+        case_sensitive: caseSensitive,
+        include_zip_files: includeZipFiles,
+        search_filenames: searchFilenames,
+      });
+      
+      setShowSaveDialog(false);
+      setSaveSearchName('');
+      fetchSavedSearches();
+      setError('');
+    } catch (error) {
+      setError(error.response?.data?.detail || 'Error saving search');
+    }
+  };
+
+  const handleLoadSearch = (search) => {
+    setSearchTerm(search.search_term);
+    setSearchPath(search.search_path);
+    setCaseSensitive(search.case_sensitive);
+    setIncludeZipFiles(search.include_zip_files);
+    setSearchFilenames(search.search_filenames);
+    setSavedSearchesAnchor(null);
+  };
+
+  const handleDeleteSavedSearch = async (searchId) => {
+    try {
+      await axios.delete(`${API_BASE_URL}/api/saved-searches/${searchId}`);
+      fetchSavedSearches();
+    } catch (error) {
+      console.error('Error deleting saved search:', error);
+    }
+  };
 
   const fetchSearchHistory = async () => {
     try {
@@ -363,15 +428,46 @@ function SearchPage() {
                   )}
                 </Box>
               ) : (
-                <Button
-                  variant="contained"
-                  size="large"
-                  startIcon={<SearchIcon />}
-                  onClick={startSearch}
-                  disabled={!searchTerm.trim()}
-                >
-                  Start Search
-                </Button>
+                <Box sx={{ display: 'flex', gap: 1, flexWrap: 'wrap' }}>
+                  <Button
+                    variant="contained"
+                    size="large"
+                    startIcon={<SearchIcon />}
+                    onClick={startSearch}
+                    disabled={!searchTerm.trim()}
+                    sx={{ flexGrow: 1 }}
+                  >
+                    Start Search
+                  </Button>
+                  
+                  <Tooltip title="Save this search configuration">
+                    <span>
+                      <IconButton
+                        color="primary"
+                        onClick={() => setShowSaveDialog(true)}
+                        disabled={!searchTerm.trim()}
+                        size="large"
+                        sx={{ border: '1px solid', borderColor: 'primary.main' }}
+                      >
+                        <BookmarkAddIcon />
+                      </IconButton>
+                    </span>
+                  </Tooltip>
+                  
+                  <Tooltip title="Load saved search">
+                    <span>
+                      <IconButton
+                        color="primary"
+                        onClick={(e) => setSavedSearchesAnchor(e.currentTarget)}
+                        disabled={savedSearches.length === 0}
+                        size="large"
+                        sx={{ border: '1px solid', borderColor: savedSearches.length > 0 ? 'primary.main' : 'grey.400' }}
+                      >
+                        <BookmarksIcon />
+                      </IconButton>
+                    </span>
+                  </Tooltip>
+                </Box>
               )}
             </Box>
           </Paper>
@@ -483,7 +579,7 @@ function SearchPage() {
                   </Grid>
                 </Grid>
 
-                <Box sx={{ mt: 2, p: 2, bgcolor: 'grey.50', borderRadius: 1 }}>
+                <Box sx={{ mt: 2, p: 2, bgcolor: 'action.hover', borderRadius: 1 }}>
                   <Typography variant="body2" color="text.secondary">
                     <strong>Search Path:</strong> {searchPath}
                   </Typography>
@@ -625,6 +721,116 @@ function SearchPage() {
           </Button>
         </DialogActions>
       </Dialog>
+
+      {/* Save Search Dialog */}
+      <Dialog open={showSaveDialog} onClose={() => setShowSaveDialog(false)} maxWidth="sm" fullWidth>
+        <DialogTitle>Save Search Configuration</DialogTitle>
+        <DialogContent>
+          <DialogContentText sx={{ mb: 2 }}>
+            Give this search a memorable name so you can quickly load it later.
+          </DialogContentText>
+          
+          <TextField
+            autoFocus
+            fullWidth
+            label="Search Name"
+            value={saveSearchName}
+            onChange={(e) => setSaveSearchName(e.target.value)}
+            placeholder="e.g., 'Python files in projects'"
+            onKeyPress={(e) => {
+              if (e.key === 'Enter') {
+                handleSaveSearch();
+              }
+            }}
+          />
+          
+          <Box sx={{ mt: 2, p: 2, bgcolor: 'action.hover', borderRadius: 1 }}>
+            <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mb: 1 }}>
+              Current Configuration:
+            </Typography>
+            <Typography variant="body2">
+              <strong>Term:</strong> {searchTerm}
+            </Typography>
+            <Typography variant="body2">
+              <strong>Path:</strong> {searchPath}
+            </Typography>
+            <Typography variant="body2">
+              <strong>Options:</strong> {[
+                caseSensitive && 'Case Sensitive',
+                includeZipFiles && 'Include Archives',
+                searchFilenames && 'Search Filenames'
+              ].filter(Boolean).join(', ') || 'None'}
+            </Typography>
+          </Box>
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={() => setShowSaveDialog(false)}>Cancel</Button>
+          <Button onClick={handleSaveSearch} variant="contained" startIcon={<BookmarkAddIcon />}>
+            Save
+          </Button>
+        </DialogActions>
+      </Dialog>
+
+      {/* Saved Searches Menu */}
+      <Menu
+        anchorEl={savedSearchesAnchor}
+        open={Boolean(savedSearchesAnchor)}
+        onClose={() => setSavedSearchesAnchor(null)}
+        PaperProps={{
+          sx: { minWidth: 350, maxHeight: 400 }
+        }}
+      >
+        <MenuItem disabled sx={{ opacity: 1, '&.Mui-disabled': { opacity: 1 } }}>
+          <Typography variant="subtitle2" color="primary">
+            <BookmarksIcon sx={{ fontSize: 18, mr: 1, verticalAlign: 'middle' }} />
+            Saved Searches ({savedSearches.length})
+          </Typography>
+        </MenuItem>
+        <Divider />
+        
+        {savedSearches.map((search) => (
+          <MenuItem
+            key={search.id}
+            onClick={() => handleLoadSearch(search)}
+            sx={{
+              display: 'flex',
+              justifyContent: 'space-between',
+              alignItems: 'flex-start',
+              py: 1.5
+            }}
+          >
+            <Box sx={{ flexGrow: 1, pr: 1 }}>
+              <Typography variant="body2" sx={{ fontWeight: 600 }}>
+                {search.name}
+              </Typography>
+              <Typography variant="caption" color="text.secondary" sx={{ display: 'block' }}>
+                {search.search_term}
+              </Typography>
+              <Typography variant="caption" color="text.secondary" sx={{ fontSize: '0.7rem' }}>
+                {search.search_path}
+              </Typography>
+            </Box>
+            <IconButton
+              size="small"
+              onClick={(e) => {
+                e.stopPropagation();
+                handleDeleteSavedSearch(search.id);
+              }}
+              sx={{ mt: 0.5 }}
+            >
+              <DeleteIcon fontSize="small" />
+            </IconButton>
+          </MenuItem>
+        ))}
+        
+        {savedSearches.length === 0 && (
+          <MenuItem disabled>
+            <Typography variant="body2" color="text.secondary">
+              No saved searches yet
+            </Typography>
+          </MenuItem>
+        )}
+      </Menu>
     </Box>
   );
 }
