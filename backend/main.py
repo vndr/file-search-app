@@ -160,9 +160,12 @@ class FileSearchEngine:
             search_pattern = self._create_search_pattern(request.search_term, request.case_sensitive)
             # Convert local path to Docker mounted path
             local_path = request.search_path
-            docker_path = f"/app/host_root{local_path}"
-            
-            search_path = Path(docker_path)
+            base_path = "/app/host_root"
+            full_path = os.path.normpath(os.path.join(base_path, local_path))
+            # Verify normalized path is within allowed base directory
+            if not full_path.startswith(base_path):
+                raise HTTPException(status_code=400, detail="Access to the requested path is not allowed.")
+            search_path = Path(full_path)
             
             if not search_path.exists():
                 raise HTTPException(status_code=400, detail=f"Search path does not exist: {local_path}")
