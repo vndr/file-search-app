@@ -34,7 +34,11 @@ import {
   AccordionSummary,
   AccordionDetails,
   Tabs,
-  Tab
+  Tab,
+  FormControlLabel,
+  Checkbox,
+  Slider,
+  Tooltip
 } from '@mui/material';
 import FolderIcon from '@mui/icons-material/Folder';
 import AnalyticsIcon from '@mui/icons-material/Analytics';
@@ -43,6 +47,7 @@ import NavigateNextIcon from '@mui/icons-material/NavigateNext';
 import ExpandMoreIcon from '@mui/icons-material/ExpandMore';
 import InsertDriveFileIcon from '@mui/icons-material/InsertDriveFile';
 import FileCopyIcon from '@mui/icons-material/FileCopy';
+import StopIcon from '@mui/icons-material/Stop';
 import axios from 'axios';
 import {
   PieChart,
@@ -53,7 +58,7 @@ import {
   XAxis,
   YAxis,
   CartesianGrid,
-  Tooltip,
+  Tooltip as RechartsTooltip,
   Legend,
   ResponsiveContainer
 } from 'recharts';
@@ -66,6 +71,11 @@ function AnalyzerPage() {
   const [analysisData, setAnalysisData] = useState(null);
   const [error, setError] = useState(null);
   const [activeTab, setActiveTab] = useState(0);
+  const [currentSessionId, setCurrentSessionId] = useState(null);
+
+  // Analysis options
+  const [findDuplicates, setFindDuplicates] = useState(true);
+  const [maxHashSize, setMaxHashSize] = useState(10);
 
   // Directory browser state
   const [showDirectoryBrowser, setShowDirectoryBrowser] = useState(false);
@@ -110,17 +120,44 @@ function AnalyzerPage() {
     setError(null);
     setAnalyzing(true);
     setAnalysisData(null);
+    
+    // Generate a session ID
+    const sessionId = `analysis_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+    setCurrentSessionId(sessionId);
 
     try {
       const response = await axios.post(`${API_URL}/api/analyze-directory`, null, {
-        params: { path: directoryPath }
+        params: { 
+          path: directoryPath,
+          find_duplicates: findDuplicates,
+          max_hash_size: maxHashSize,
+          session_id: sessionId
+        }
       });
       setAnalysisData(response.data);
+      
+      // Show message if cancelled
+      if (response.data.cancelled) {
+        setError('Analysis was stopped. Showing partial results.');
+      }
     } catch (error) {
       console.error('Error analyzing directory:', error);
       setError(error.response?.data?.detail || 'Error analyzing directory');
     } finally {
       setAnalyzing(false);
+      setCurrentSessionId(null);
+    }
+  };
+
+  // Handle stop button
+  const handleStop = async () => {
+    if (!currentSessionId) return;
+    
+    try {
+      await axios.post(`${API_URL}/api/cancel-analysis/${currentSessionId}`);
+      // The analyze request will return with partial results
+    } catch (error) {
+      console.error('Error cancelling analysis:', error);
     }
   };
 
@@ -192,7 +229,7 @@ function AnalyzerPage() {
         {/* Directory Selection */}
         <Box sx={{ mt: 3, mb: 3 }}>
           <Grid container spacing={2} alignItems="center">
-            <Grid item xs={12} md={10}>
+            <Grid item xs={12} md={8}>
               <TextField
                 fullWidth
                 label="Directory Path"
@@ -202,33 +239,116 @@ function AnalyzerPage() {
                 disabled={analyzing}
               />
             </Grid>
-            <Grid item xs={6} md={1}>
-              <IconButton
-                color="primary"
+            <Grid item xs={6} md={2}>
+              <Button
+                fullWidth
+                variant="outlined"
+                startIcon={<FolderOpenIcon />}
                 onClick={() => {
                   setShowDirectoryBrowser(true);
                   fetchDirectories(directoryPath || '/');
                 }}
                 disabled={analyzing}
-                title="Browse directories"
               >
-                <FolderOpenIcon />
-              </IconButton>
-            </Grid>
-            <Grid item xs={6} md={1}>
-              <Button
-                fullWidth
-                variant="contained"
-                color="primary"
-                onClick={handleAnalyze}
-                disabled={analyzing || !directoryPath}
-                startIcon={analyzing ? <CircularProgress size={20} /> : <AnalyticsIcon />}
-              >
-                {analyzing ? 'Analyzing...' : 'Analyze'}
+                Browse
               </Button>
+            </Grid>
+            <Grid item xs={6} md={2}>
+              {analyzing ? (
+                <Button
+                  fullWidth
+                  variant="contained"
+                  color="error"
+                  onClick={handleStop}
+                  startIcon={<StopIcon />}
+                >
+                  Stop
+                </Button>
+              ) : (
+                <Button
+                  fullWidth
+                  variant="contained"
+                  color="primary"
+                  onClick={handleAnalyze}
+                  disabled={!directoryPath}
+                  startIcon={<AnalyticsIcon />}
+                >
+                  Analyze
+                </Button>
+              )}
             </Grid>
           </Grid>
         </Box>
+
+        {/* Analyzing Progress Indicator */}
+        {analyzing && (
+          <Alert severity="info" sx={{ mb: 3, display: 'flex', alignItems: 'center' }}>
+            <CircularProgress size={20} sx={{ mr: 2 }} />
+            <Box>
+              <Typography variant="body2">
+                <strong>Analyzing directory...</strong> This may take a while for large directories.
+              </Typography>
+              <Typography variant="body2" sx={{ mt: 0.5 }}>
+                Click <strong>Stop</strong> to cancel and see partial results.
+              </Typography>
+            </Box>
+          </Alert>
+        )}
+
+        {/* Analysis Options */}
+        <Paper sx={{ p: 2, mb: 3, bgcolor: 'grey.50' }}>
+          <Typography variant="subtitle2" gutterBottom>
+            Analysis Options
+          </Typography>
+          <Grid container spacing={2} alignItems="center">
+            <Grid item xs={12} md={6}>
+              <Tooltip title="Disable duplicate detection for faster analysis of large directories">
+                <FormControlLabel
+                  control={
+                    <Checkbox
+                      checked={findDuplicates}
+                      onChange={(e) => setFindDuplicates(e.target.checked)}
+                      disabled={analyzing}
+                    />
+                  }
+                  label="Find Duplicate Files (slower)"
+                />
+              </Tooltip>
+            </Grid>
+            <Grid item xs={12} md={6}>
+              <Tooltip title="Only hash files smaller than this size for duplicate detection">
+                <Box>
+                  <Typography variant="body2" gutterBottom>
+                    Max File Size for Hashing: {maxHashSize} MB
+                  </Typography>
+                  <Slider
+                    value={maxHashSize}
+                    onChange={(e, value) => setMaxHashSize(value)}
+                    min={1}
+                    max={100}
+                    step={1}
+                    marks={[
+                      { value: 1, label: '1MB' },
+                      { value: 10, label: '10MB' },
+                      { value: 50, label: '50MB' },
+                      { value: 100, label: '100MB' }
+                    ]}
+                    disabled={analyzing || !findDuplicates}
+                  />
+                </Box>
+              </Tooltip>
+            </Grid>
+          </Grid>
+          <Alert severity="info" sx={{ mt: 2 }}>
+            <Typography variant="body2">
+              <strong>Performance Tips:</strong> For directories with 100,000+ files, disable duplicate detection or reduce max hash size for faster analysis. 
+              The optimized algorithm uses parallel processing and smart sampling for better performance.
+            </Typography>
+            <Typography variant="body2" sx={{ mt: 1 }}>
+              <strong>Note:</strong> Hidden directories (starting with ".") like .git, .cache, .npm are automatically excluded from analysis.
+            </Typography>
+          </Alert>
+        </Paper>
 
         {/* Error Display */}
         {error && (
@@ -308,12 +428,20 @@ function AnalyzerPage() {
                         />
                       )}
                     </Typography>
-                    <Typography variant="h4" color="error">
-                      {analysisData.summary.duplicate_files}
-                    </Typography>
-                    <Typography variant="body2" color="text.secondary">
-                      Wasted: {formatBytes(analysisData.summary.wasted_space)}
-                    </Typography>
+                    {!findDuplicates ? (
+                      <Typography variant="body1" color="text.secondary">
+                        Not analyzed
+                      </Typography>
+                    ) : (
+                      <>
+                        <Typography variant="h4" color="error">
+                          {analysisData.summary.duplicate_files}
+                        </Typography>
+                        <Typography variant="body2" color="text.secondary">
+                          Wasted: {formatBytes(analysisData.summary.wasted_space)}
+                        </Typography>
+                      </>
+                    )}
                   </CardContent>
                 </Card>
               </Grid>
@@ -356,7 +484,7 @@ function AnalyzerPage() {
                               <Cell key={`cell-${index}`} fill={COLORS[index % COLORS.length]} />
                             ))}
                           </Pie>
-                          <Tooltip />
+                          <RechartsTooltip />
                         </PieChart>
                       </ResponsiveContainer>
                     </Paper>
@@ -371,7 +499,7 @@ function AnalyzerPage() {
                           <CartesianGrid strokeDasharray="3 3" />
                           <XAxis dataKey="extension" />
                           <YAxis tickFormatter={(value) => formatBytes(value)} />
-                          <Tooltip formatter={(value) => formatBytes(value)} />
+                          <RechartsTooltip formatter={(value) => formatBytes(value)} />
                           <Legend />
                           <Bar dataKey="total_size" fill="#8884d8" name="Total Size" />
                         </BarChart>
@@ -395,7 +523,7 @@ function AnalyzerPage() {
                       <CartesianGrid strokeDasharray="3 3" />
                       <XAxis dataKey="range" />
                       <YAxis />
-                      <Tooltip />
+                      <RechartsTooltip />
                       <Legend />
                       <Bar dataKey="count" fill="#00C49F" name="Number of Files" />
                     </BarChart>

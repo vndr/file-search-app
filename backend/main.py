@@ -53,6 +53,10 @@ engine = create_engine(DATABASE_URL)
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 Base = declarative_base()
 
+# Global cancellation tracking for directory analysis
+analysis_cancellations = {}
+analysis_cancellations_lock = asyncio.Lock()
+
 # Models
 class SearchSession(Base):
     __tablename__ = "search_sessions"
@@ -1235,13 +1239,68 @@ async def list_directories(path: str = "/"):
         raise HTTPException(status_code=500, detail=f"Error listing directories: {str(e)}")
 
 @app.post("/api/analyze-directory")
-async def analyze_directory(path: str):
+async def analyze_directory(path: str, find_duplicates: bool = True, max_hash_size: int = 10, session_id: str = None):
     """
     Analyze a directory and return comprehensive statistics about its contents.
     Returns file type distribution, size statistics, duplicate files, and detailed file list.
+    
+    Parameters:
+    - path: Directory path to analyze
+    - find_duplicates: Whether to calculate file hashes for duplicate detection (slower)
+    - max_hash_size: Maximum file size in MB to hash for duplicates (default: 10MB)
+    - session_id: Optional session ID for cancellation support
     """
     import hashlib
     from collections import defaultdict
+    from concurrent.futures import ThreadPoolExecutor, as_completed
+    import threading
+    import uuid
+    
+    # Generate session ID if not provided
+    if not session_id:
+        session_id = str(uuid.uuid4())
+    
+    # Register this analysis session
+    analysis_cancellations[session_id] = False
+    
+    def is_cancelled():
+        """Check if analysis has been cancelled"""
+        return analysis_cancellations.get(session_id, False)
+    
+    def quick_hash(file_path: Path, file_size: int) -> str:
+        """
+        Fast hashing using size-based sampling:
+        - Files < 1MB: Full hash
+        - Files >= 1MB: Hash first 64KB + middle 64KB + last 64KB + size
+        """
+        try:
+            hash_md5 = hashlib.md5()
+            
+            # Always include file size in hash
+            hash_md5.update(str(file_size).encode())
+            
+            if file_size < 1024 * 1024:  # < 1MB: full hash
+                with open(file_path, "rb") as f:
+                    for chunk in iter(lambda: f.read(8192), b""):
+                        hash_md5.update(chunk)
+            else:  # >= 1MB: sample hash
+                with open(file_path, "rb") as f:
+                    # First 64KB
+                    hash_md5.update(f.read(65536))
+                    
+                    # Middle 64KB
+                    if file_size > 131072:
+                        f.seek(file_size // 2)
+                        hash_md5.update(f.read(65536))
+                    
+                    # Last 64KB
+                    if file_size > 65536:
+                        f.seek(-65536, 2)
+                        hash_md5.update(f.read(65536))
+            
+            return hash_md5.hexdigest()
+        except:
+            return None
     
     try:
         # Security: Validate and normalize the path
@@ -1274,16 +1333,35 @@ async def analyze_directory(path: str):
         file_list = []
         file_type_counts = defaultdict(int)
         file_type_sizes = defaultdict(int)
-        file_hashes = defaultdict(list)
+        size_key_map = {}  # Map size to list of files for pre-filtering duplicates
         total_size = 0
         total_files = 0
         total_dirs = 0
         
-        # Recursively walk through directory
+        max_hash_bytes = max_hash_size * 1024 * 1024
+        
+        print(f"Starting directory analysis: {full_path}")
+        print(f"Find duplicates: {find_duplicates}, Max hash size: {max_hash_size}MB")
+        print(f"Excluding hidden directories (starting with '.')")
+        
+        # Phase 1: Fast metadata collection (no hashing)
+        print("Phase 1: Collecting file metadata...")
         for root, dirs, files in os.walk(full_path):
+            # Check for cancellation
+            if is_cancelled():
+                print(f"Analysis cancelled by user at {total_files} files")
+                break
+            
+            # Filter out hidden directories (starting with ".")
+            dirs[:] = [d for d in dirs if not d.startswith('.')]
             total_dirs += len(dirs)
             
             for filename in files:
+                # Check cancellation periodically (every 100 files)
+                if total_files % 100 == 0 and is_cancelled():
+                    print(f"Analysis cancelled by user at {total_files} files")
+                    break
+                
                 try:
                     file_path = Path(root) / filename
                     
@@ -1291,7 +1369,7 @@ async def analyze_directory(path: str):
                     if not os.access(file_path, os.R_OK):
                         continue
                     
-                    # Get file stats
+                    # Get file stats (fast - just metadata)
                     stat = file_path.stat()
                     file_size = stat.st_size
                     modified_time = datetime.fromtimestamp(stat.st_mtime)
@@ -1301,19 +1379,7 @@ async def analyze_directory(path: str):
                     mime_type, _ = mimetypes.guess_type(str(file_path))
                     mime_type = mime_type or 'application/octet-stream'
                     
-                    # Calculate file hash for duplicate detection (only for files < 100MB)
-                    file_hash = None
-                    if file_size < 100 * 1024 * 1024:  # 100MB limit
-                        try:
-                            hash_md5 = hashlib.md5()
-                            with open(file_path, "rb") as f:
-                                for chunk in iter(lambda: f.read(4096), b""):
-                                    hash_md5.update(chunk)
-                            file_hash = hash_md5.hexdigest()
-                        except:
-                            pass  # Skip hash if file can't be read
-                    
-                    # Add to file list
+                    # Add to file list (without hash yet)
                     file_info = {
                         "name": filename,
                         "path": str(file_path).replace("/app/host_root", ""),
@@ -1321,7 +1387,8 @@ async def analyze_directory(path: str):
                         "extension": file_ext,
                         "mime_type": mime_type,
                         "modified": modified_time.isoformat(),
-                        "hash": file_hash
+                        "hash": None,
+                        "_full_path": str(file_path)  # Temporary for hashing
                     }
                     file_list.append(file_info)
                     
@@ -1331,33 +1398,82 @@ async def analyze_directory(path: str):
                     total_size += file_size
                     total_files += 1
                     
-                    # Track duplicates
-                    if file_hash:
-                        file_hashes[file_hash].append(file_info)
+                    # Pre-filter for duplicates: only hash files with same size
+                    if find_duplicates and file_size > 0 and file_size <= max_hash_bytes:
+                        if file_size not in size_key_map:
+                            size_key_map[file_size] = []
+                        size_key_map[file_size].append(file_info)
                 
                 except (PermissionError, OSError):
                     continue  # Skip files we can't access
         
-        # Find duplicates (files with same hash)
+        print(f"Phase 1 complete: {total_files} files, {total_dirs} directories")
+        
+        # Phase 2: Parallel hashing (only for potential duplicates)
+        file_hashes = defaultdict(list)
+        
+        if find_duplicates:
+            # Only hash files that have at least one other file with the same size
+            files_to_hash = []
+            for size, file_infos in size_key_map.items():
+                if len(file_infos) > 1:  # Only hash if multiple files have same size
+                    files_to_hash.extend(file_infos)
+            
+            if files_to_hash:
+                print(f"Phase 2: Hashing {len(files_to_hash)} potential duplicates (parallel)...")
+                
+                # Use thread pool for parallel hashing
+                with ThreadPoolExecutor(max_workers=min(8, os.cpu_count() or 4)) as executor:
+                    future_to_file = {
+                        executor.submit(quick_hash, Path(f["_full_path"]), f["size"]): f
+                        for f in files_to_hash
+                    }
+                    
+                    completed = 0
+                    for future in as_completed(future_to_file):
+                        file_info = future_to_file[future]
+                        try:
+                            file_hash = future.result()
+                            if file_hash:
+                                file_info["hash"] = file_hash
+                                file_hashes[file_hash].append(file_info)
+                            completed += 1
+                            if completed % 1000 == 0:
+                                print(f"  Hashed {completed}/{len(files_to_hash)} files...")
+                        except Exception as e:
+                            print(f"  Error hashing {file_info['name']}: {e}")
+                            continue
+                
+                print(f"Phase 2 complete: Hashed {len(files_to_hash)} files")
+        
+        # Clean up temporary field
+        for file_info in file_list:
+            if "_full_path" in file_info:
+                del file_info["_full_path"]
+        
+        print("Building final results...")
+        
+        # Track duplicates
         duplicates = []
         duplicate_size = 0
-        for hash_value, files in file_hashes.items():
-            if len(files) > 1:
-                # This is a duplicate group
-                group_size = files[0]["size"]
-                wasted_space = group_size * (len(files) - 1)
-                duplicate_size += wasted_space
-                
-                duplicates.append({
-                    "hash": hash_value,
-                    "count": len(files),
-                    "size": group_size,
-                    "wasted_space": wasted_space,
-                    "files": [{"name": f["name"], "path": f["path"]} for f in files]
-                })
-        
-        # Sort duplicates by wasted space
-        duplicates.sort(key=lambda x: x["wasted_space"], reverse=True)
+        if find_duplicates:
+            for hash_value, files in file_hashes.items():
+                if len(files) > 1:
+                    # This is a duplicate group
+                    group_size = files[0]["size"]
+                    wasted_space = group_size * (len(files) - 1)
+                    duplicate_size += wasted_space
+                    
+                    duplicates.append({
+                        "hash": hash_value,
+                        "count": len(files),
+                        "size": group_size,
+                        "wasted_space": wasted_space,
+                        "files": [{"name": f["name"], "path": f["path"]} for f in files]
+                    })
+            
+            # Sort duplicates by wasted space
+            duplicates.sort(key=lambda x: x["wasted_space"], reverse=True)
         
         # Convert file type stats to list format
         file_types = [
@@ -1404,7 +1520,12 @@ async def analyze_directory(path: str):
         # Get top 10 largest files
         largest_files = sorted(file_list, key=lambda x: x["size"], reverse=True)[:10]
         
+        # Check if analysis was cancelled
+        cancelled = is_cancelled()
+        
         return {
+            "session_id": session_id,
+            "cancelled": cancelled,
             "summary": {
                 "path": str(full_path).replace("/app/host_root", ""),
                 "total_files": total_files,
@@ -1428,6 +1549,21 @@ async def analyze_directory(path: str):
         import traceback
         traceback.print_exc()
         raise HTTPException(status_code=500, detail=f"Error analyzing directory: {str(e)}")
+    finally:
+        # Clean up cancellation tracking
+        if session_id in analysis_cancellations:
+            del analysis_cancellations[session_id]
+
+@app.post("/api/cancel-analysis/{session_id}")
+async def cancel_analysis(session_id: str):
+    """
+    Cancel an ongoing directory analysis
+    """
+    if session_id in analysis_cancellations:
+        analysis_cancellations[session_id] = True
+        return {"status": "cancelled", "session_id": session_id}
+    else:
+        raise HTTPException(status_code=404, detail="Analysis session not found or already completed")
 
 @app.get("/health")
 async def health_check():
