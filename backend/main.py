@@ -158,7 +158,11 @@ class FileSearchEngine:
         start_time = time.time()
         
         try:
-            search_pattern = self._create_search_pattern(request.search_term, request.case_sensitive)
+            # Create search pattern based on search mode
+            if request.search_filenames:
+                search_pattern = self._create_filename_pattern(request.search_term, request.case_sensitive)
+            else:
+                search_pattern = self._create_search_pattern(request.search_term, request.case_sensitive)
             
             # Secure path handling - prevent directory traversal attacks
             base_path = "/app/host_root"
@@ -292,8 +296,31 @@ class FileSearchEngine:
             raise e
     
     def _create_search_pattern(self, search_term: str, case_sensitive: bool):
+        """Create pattern for content search (exact match)"""
         flags = 0 if case_sensitive else re.IGNORECASE
         return re.compile(re.escape(search_term), flags)
+    
+    def _create_filename_pattern(self, search_term: str, case_sensitive: bool):
+        """Create pattern for filename search (supports wildcards and partial match)"""
+        flags = 0 if case_sensitive else re.IGNORECASE
+        
+        # Convert shell-style wildcards to regex
+        # * becomes .* (match any characters)
+        # ? becomes . (match single character)
+        pattern = search_term
+        
+        # Check if user is using wildcards
+        if '*' in pattern or '?' in pattern:
+            # Escape special regex characters except * and ?
+            pattern = re.escape(pattern)
+            # Convert shell wildcards to regex
+            pattern = pattern.replace(r'\*', '.*').replace(r'\?', '.')
+        else:
+            # No wildcards - do partial match (search anywhere in filename)
+            pattern = re.escape(pattern)
+        
+        # Compile with appropriate flags
+        return re.compile(pattern, flags)
     
     async def _walk_directory(self, path: Path) -> AsyncGenerator[Path, None]:
         """Async generator to walk through directory"""
