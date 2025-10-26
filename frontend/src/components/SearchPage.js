@@ -41,6 +41,7 @@ function SearchPage() {
   const [searchPath, setSearchPath] = useState('/Users/vndr');
   const [caseSensitive, setCaseSensitive] = useState(false);
   const [includeZipFiles, setIncludeZipFiles] = useState(true);
+  const [searchFilenames, setSearchFilenames] = useState(false);
   const [isSearching, setIsSearching] = useState(false);
   const [searchProgress, setSearchProgress] = useState({
     currentFile: '',
@@ -86,6 +87,7 @@ function SearchPage() {
         search_path: searchPath,
         case_sensitive: caseSensitive,
         include_zip_files: includeZipFiles,
+        search_filenames: searchFilenames,
       }));
     };
 
@@ -184,12 +186,15 @@ function SearchPage() {
             <Box component="form" noValidate autoComplete="off">
               <TextField
                 fullWidth
-                label="Search Term"
+                label={searchFilenames ? "Filename Pattern" : "Search Term"}
                 value={searchTerm}
                 onChange={(e) => setSearchTerm(e.target.value)}
-                placeholder="e.g., John Doe"
+                placeholder={searchFilenames ? "e.g., *.pdf or report" : "e.g., John Doe"}
                 sx={{ mb: 2 }}
                 disabled={isSearching}
+                helperText={searchFilenames 
+                  ? "Enter a pattern to match filenames (supports wildcards like *.txt)"
+                  : "Enter text to search within file contents"}
               />
 
               <TextField
@@ -249,16 +254,41 @@ function SearchPage() {
                 <FormControlLabel
                   control={
                     <Switch
-                      checked={includeZipFiles}
-                      onChange={(e) => setIncludeZipFiles(e.target.checked)}
+                      checked={searchFilenames}
+                      onChange={(e) => {
+                        setSearchFilenames(e.target.checked);
+                        if (e.target.checked) {
+                          setIncludeZipFiles(false); // Disable archive search for filename mode
+                        }
+                      }}
                       disabled={isSearching}
                     />
                   }
-                  label="Include Archive & Document Files"
+                  label="Search Filenames Only"
                 />
                 <Typography variant="caption" color="text.secondary" sx={{ display: 'block', ml: 4, mt: -1, mb: 2 }}>
-                  Searches inside: ZIP, TAR, TAR.GZ, TAR.BZ2, DOCX, XLSX, PPTX, ODT, ODS, ODP
+                  {searchFilenames 
+                    ? "Searches for files matching the pattern in their names"
+                    : "Searches for text content inside files"}
                 </Typography>
+                
+                {!searchFilenames && (
+                  <>
+                    <FormControlLabel
+                      control={
+                        <Switch
+                          checked={includeZipFiles}
+                          onChange={(e) => setIncludeZipFiles(e.target.checked)}
+                          disabled={isSearching}
+                        />
+                      }
+                      label="Include Archive & Document Files"
+                    />
+                    <Typography variant="caption" color="text.secondary" sx={{ display: 'block', ml: 4, mt: -1, mb: 2 }}>
+                      Searches inside: ZIP, TAR, TAR.GZ, TAR.BZ2, DOCX, XLSX, PPTX, ODT, ODS, ODP
+                    </Typography>
+                  </>
+                )}
               </Box>
 
               {isSearching ? (

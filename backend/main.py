@@ -100,6 +100,7 @@ class SearchRequest(BaseModel):
     search_path: str = "/Users/vndr"
     case_sensitive: bool = False
     include_zip_files: bool = True
+    search_filenames: bool = False  # New: search by filename instead of content
 
 class SearchSessionResponse(BaseModel):
     id: int
@@ -196,6 +197,35 @@ class FileSearchEngine:
                 total_files += 1
                 
                 try:
+                    # If searching by filename, check filename match
+                    if request.search_filenames:
+                        if search_pattern.search(file_path.name):
+                            # Create a result for filename match
+                            result = SearchResult(
+                                session_id=session_id,
+                                file_path=str(file_path).replace('/app/host_root', ''),
+                                file_name=file_path.name,
+                                file_size=file_path.stat().st_size if file_path.is_file() else 0,
+                                file_type=file_path.suffix.lower(),
+                                match_count=1,
+                                is_zip_file=False,
+                                preview_text=f"Filename match: {file_path.name}"
+                            )
+                            self.db_session.add(result)
+                            self.db_session.flush()
+                            
+                            # Add a single match detail for the filename
+                            match_detail = MatchDetail(
+                                result_id=result.id,
+                                line_number=0,
+                                line_content=f"Filename: {file_path.name}",
+                                match_position=0
+                            )
+                            self.db_session.add(match_detail)
+                            total_matches += 1
+                        continue  # Skip content search when searching filenames
+                    
+                    # Content search (original logic)
                     file_ext = file_path.suffix.lower()
                     
                     # Handle archive files
