@@ -152,9 +152,9 @@ jobs:
           cd frontend
           docker build -t file-search-frontend:test .
 
-      - name: Test docker-compose config
+      - name: Test docker compose config
         run: |
-          docker-compose config
+          docker compose config
 
   # Code Quality Summary
   quality-summary:
@@ -206,7 +206,7 @@ jobs:
             comment += `# On your server\n`;
             comment += `git clone <your-repo-url>\n`;
             comment += `cd file-search-app\n`;
-            comment += `docker-compose up -d\n`;
+            comment += `docker compose up -d\n`;
             comment += `\`\`\`\n\n`;
             comment += `**Requirements:**\n`;
             comment += `- Docker & Docker Compose installed\n`;
