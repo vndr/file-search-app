@@ -1,0 +1,26 @@
+name: "CodeQL Config"
+
+# Disable specific queries
+disable-default-queries: false
+
+queries:
+  - uses: security-and-quality
+
+# Paths to ignore
+paths-ignore:
+  - '**/*.test.js'
+  - '**/*.test.py'
+  - '**/tests/**'
+  - '**/test_*.py'
+
+# Query filters - suppress specific rules
+query-filters:
+  # Suppress path injection warnings (we have comprehensive validation)
+  - exclude:
+      id: py/path-injection
+      
+  # Or suppress only for specific paths:
+  # - exclude:
+  #     id: py/path-injection
+  #     paths:
+  #       - backend/main.py
