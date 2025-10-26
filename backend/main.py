@@ -50,6 +50,62 @@ except ImportError:
     PdfReader = None
 
 
+# Security: Path validation function
+def validate_and_resolve_path(user_path: str, base_path: Path) -> Path:
+    """
+    Securely validate and resolve a user-provided path.
+    
+    Args:
+        user_path: User-provided path string
+        base_path: Base directory that all paths must be within
+        
+    Returns:
+        Resolved absolute path that is guaranteed to be within base_path
+        
+    Raises:
+        HTTPException: If path is invalid or outside base_path
+    """
+    # Normalize the base path
+    base_path_resolved = base_path.resolve()
+    
+    # Handle paths that already include the base
+    if user_path.startswith("/app/host_root"):
+        candidate_path = Path(user_path)
+    else:
+        # Remove leading slash and normalize
+        clean_path = user_path.lstrip("/")
+        
+        # Check for path traversal attempts before joining
+        if ".." in clean_path or "~" in clean_path:
+            raise HTTPException(
+                status_code=400, 
+                detail="Invalid path: path traversal not allowed"
+            )
+        
+        # Join with base path
+        candidate_path = base_path / clean_path
+    
+    # Resolve to absolute path (this resolves symlinks too)
+    try:
+        resolved_path = candidate_path.resolve()
+    except (OSError, RuntimeError) as e:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Invalid path: {str(e)}"
+        )
+    
+    # Verify the resolved path is within base_path
+    try:
+        resolved_path.relative_to(base_path_resolved)
+    except ValueError:
+        raise HTTPException(
+            status_code=403,
+            detail="Access denied: Path outside allowed directory"
+        )
+    
+    return resolved_path
+
+
 # Database setup
 DATABASE_URL = os.getenv("DATABASE_URL", "postgresql://postgres:password@localhost:5432/filesearch")
 engine = create_engine(DATABASE_URL)
@@ -1218,24 +1274,9 @@ async def list_directories(path: str = "/"):
     Returns subdirectories only (not files).
     """
     try:
-        # Security: Validate and normalize the path
+        # Security: Validate and resolve path securely
         host_root = Path("/app/host_root")
-        
-        # Convert the path to absolute and resolve it
-        if path.startswith("/app/host_root"):
-            full_path = Path(path)
-        else:
-            # Treat as a path relative to host_root
-            if path.startswith("/"):
-                path = path[1:]
-            full_path = host_root / path
-        
-        # Resolve to absolute path and check it's within host_root
-        full_path = full_path.resolve()
-        host_root_resolved = host_root.resolve()
-        
-        if not str(full_path).startswith(str(host_root_resolved)):
-            raise HTTPException(status_code=403, detail="Access denied: Path outside allowed directory")
+        full_path = validate_and_resolve_path(path, host_root)
         
         # Check if path exists and is a directory
         if not full_path.exists():
@@ -1260,6 +1301,7 @@ async def list_directories(path: str = "/"):
             pass  # Skip directories we can't read
         
         # Get parent directory info
+        host_root_resolved = host_root.resolve()
         parent_path = None
         if full_path != host_root_resolved:
             parent = full_path.parent
@@ -1348,24 +1390,9 @@ async def analyze_directory(path: str, find_duplicates: bool = True, max_hash_si
             return None
     
     try:
-        # Security: Validate and normalize the path
+        # Security: Validate and resolve path securely
         host_root = Path("/app/host_root")
-        
-        # Convert the path to absolute and resolve it
-        if path.startswith("/app/host_root"):
-            full_path = Path(path)
-        else:
-            # Treat as a path relative to host_root
-            if path.startswith("/"):
-                path = path[1:]
-            full_path = host_root / path
-        
-        # Resolve to absolute path and check it's within host_root
-        full_path = full_path.resolve()
-        host_root_resolved = host_root.resolve()
-        
-        if not str(full_path).startswith(str(host_root_resolved)):
-            raise HTTPException(status_code=403, detail="Access denied: Path outside allowed directory")
+        full_path = validate_and_resolve_path(path, host_root)
         
         # Check if path exists and is a directory
         if not full_path.exists():
@@ -1834,33 +1861,10 @@ async def delete_empty_directories(request: dict):
     for dir_path in directories:
         try:
             print(f"Processing directory: {dir_path}")
-            # Security: Validate and normalize the path
-            if dir_path.startswith("/app/host_root"):
-                full_path = Path(dir_path)
-            else:
-                # Treat as a path relative to host_root
-                if dir_path.startswith("/"):
-                    dir_path_clean = dir_path[1:]
-                else:
-                    dir_path_clean = dir_path
-                full_path = host_root / dir_path_clean
+            # Security: Validate and resolve path securely
+            full_path = validate_and_resolve_path(dir_path, host_root)
             
             print(f"Full path resolved to: {full_path}")
-            
-            # Resolve to absolute path and check it's within host_root
-            full_path = full_path.resolve()
-            host_root_resolved = host_root.resolve()
-            
-            print(f"Resolved full path: {full_path}")
-            print(f"Host root resolved: {host_root_resolved}")
-            
-            if not str(full_path).startswith(str(host_root_resolved)):
-                print(f"FAILED: Path outside allowed directory")
-                failed.append({
-                    "path": dir_path,
-                    "error": "Access denied: Path outside allowed directory"
-                })
-                continue
             
             # Check if path exists and is a directory
             if not full_path.exists():
