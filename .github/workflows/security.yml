@@ -75,12 +75,14 @@ jobs:
         if: always()
         with:
           sarif_file: 'trivy-backend-results.sarif'
+          category: 'trivy-backend'
 
       - name: Upload Trivy Frontend results
         uses: github/codeql-action/upload-sarif@v3
         if: always()
         with:
           sarif_file: 'trivy-frontend-results.sarif'
+          category: 'trivy-frontend'
 
   # OWASP Dependency Check
   owasp-dependency-check:
