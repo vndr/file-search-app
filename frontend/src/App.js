@@ -1,10 +1,13 @@
 import React from 'react';
-import { Routes, Route } from 'react-router-dom';
-import { Container, AppBar, Toolbar, Typography, Box } from '@mui/material';
+import { Routes, Route, Link as RouterLink } from 'react-router-dom';
+import { Container, AppBar, Toolbar, Typography, Box, Button } from '@mui/material';
 import SearchIcon from '@mui/icons-material/Search';
+import AnalyticsIcon from '@mui/icons-material/Analytics';
+import HistoryIcon from '@mui/icons-material/History';
 import SearchPage from './components/SearchPage';
 import ResultsPage from './components/ResultsPage';
 import HistoryPage from './components/HistoryPage';
+import AnalyzerPage from './components/AnalyzerPage';
 
 function App() {
   return (
@@ -15,6 +18,30 @@ function App() {
           <Typography variant="h6" component="div" sx={{ flexGrow: 1 }}>
             File Search Application
           </Typography>
+          <Button
+            color="inherit"
+            component={RouterLink}
+            to="/"
+            startIcon={<SearchIcon />}
+          >
+            Search
+          </Button>
+          <Button
+            color="inherit"
+            component={RouterLink}
+            to="/analyzer"
+            startIcon={<AnalyticsIcon />}
+          >
+            Analyzer
+          </Button>
+          <Button
+            color="inherit"
+            component={RouterLink}
+            to="/history"
+            startIcon={<HistoryIcon />}
+          >
+            History
+          </Button>
         </Toolbar>
       </AppBar>
       
@@ -23,6 +50,7 @@ function App() {
           <Route path="/" element={<SearchPage />} />
           <Route path="/results/:sessionId" element={<ResultsPage />} />
           <Route path="/history" element={<HistoryPage />} />
+          <Route path="/analyzer" element={<AnalyzerPage />} />
         </Routes>
       </Container>
     </Box>

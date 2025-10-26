@@ -1234,6 +1234,201 @@ async def list_directories(path: str = "/"):
         traceback.print_exc()
         raise HTTPException(status_code=500, detail=f"Error listing directories: {str(e)}")
 
+@app.post("/api/analyze-directory")
+async def analyze_directory(path: str):
+    """
+    Analyze a directory and return comprehensive statistics about its contents.
+    Returns file type distribution, size statistics, duplicate files, and detailed file list.
+    """
+    import hashlib
+    from collections import defaultdict
+    
+    try:
+        # Security: Validate and normalize the path
+        host_root = Path("/app/host_root")
+        
+        # Convert the path to absolute and resolve it
+        if path.startswith("/app/host_root"):
+            full_path = Path(path)
+        else:
+            # Treat as a path relative to host_root
+            if path.startswith("/"):
+                path = path[1:]
+            full_path = host_root / path
+        
+        # Resolve to absolute path and check it's within host_root
+        full_path = full_path.resolve()
+        host_root_resolved = host_root.resolve()
+        
+        if not str(full_path).startswith(str(host_root_resolved)):
+            raise HTTPException(status_code=403, detail="Access denied: Path outside allowed directory")
+        
+        # Check if path exists and is a directory
+        if not full_path.exists():
+            raise HTTPException(status_code=404, detail="Path not found")
+        
+        if not full_path.is_dir():
+            raise HTTPException(status_code=400, detail="Path is not a directory")
+        
+        # Initialize data structures
+        file_list = []
+        file_type_counts = defaultdict(int)
+        file_type_sizes = defaultdict(int)
+        file_hashes = defaultdict(list)
+        total_size = 0
+        total_files = 0
+        total_dirs = 0
+        
+        # Recursively walk through directory
+        for root, dirs, files in os.walk(full_path):
+            total_dirs += len(dirs)
+            
+            for filename in files:
+                try:
+                    file_path = Path(root) / filename
+                    
+                    # Check if we can access the file
+                    if not os.access(file_path, os.R_OK):
+                        continue
+                    
+                    # Get file stats
+                    stat = file_path.stat()
+                    file_size = stat.st_size
+                    modified_time = datetime.fromtimestamp(stat.st_mtime)
+                    
+                    # Get file extension and MIME type
+                    file_ext = file_path.suffix.lower() or '.no_extension'
+                    mime_type, _ = mimetypes.guess_type(str(file_path))
+                    mime_type = mime_type or 'application/octet-stream'
+                    
+                    # Calculate file hash for duplicate detection (only for files < 100MB)
+                    file_hash = None
+                    if file_size < 100 * 1024 * 1024:  # 100MB limit
+                        try:
+                            hash_md5 = hashlib.md5()
+                            with open(file_path, "rb") as f:
+                                for chunk in iter(lambda: f.read(4096), b""):
+                                    hash_md5.update(chunk)
+                            file_hash = hash_md5.hexdigest()
+                        except:
+                            pass  # Skip hash if file can't be read
+                    
+                    # Add to file list
+                    file_info = {
+                        "name": filename,
+                        "path": str(file_path).replace("/app/host_root", ""),
+                        "size": file_size,
+                        "extension": file_ext,
+                        "mime_type": mime_type,
+                        "modified": modified_time.isoformat(),
+                        "hash": file_hash
+                    }
+                    file_list.append(file_info)
+                    
+                    # Update statistics
+                    file_type_counts[file_ext] += 1
+                    file_type_sizes[file_ext] += file_size
+                    total_size += file_size
+                    total_files += 1
+                    
+                    # Track duplicates
+                    if file_hash:
+                        file_hashes[file_hash].append(file_info)
+                
+                except (PermissionError, OSError):
+                    continue  # Skip files we can't access
+        
+        # Find duplicates (files with same hash)
+        duplicates = []
+        duplicate_size = 0
+        for hash_value, files in file_hashes.items():
+            if len(files) > 1:
+                # This is a duplicate group
+                group_size = files[0]["size"]
+                wasted_space = group_size * (len(files) - 1)
+                duplicate_size += wasted_space
+                
+                duplicates.append({
+                    "hash": hash_value,
+                    "count": len(files),
+                    "size": group_size,
+                    "wasted_space": wasted_space,
+                    "files": [{"name": f["name"], "path": f["path"]} for f in files]
+                })
+        
+        # Sort duplicates by wasted space
+        duplicates.sort(key=lambda x: x["wasted_space"], reverse=True)
+        
+        # Convert file type stats to list format
+        file_types = [
+            {
+                "extension": ext,
+                "count": count,
+                "total_size": file_type_sizes[ext],
+                "average_size": file_type_sizes[ext] // count if count > 0 else 0
+            }
+            for ext, count in file_type_counts.items()
+        ]
+        
+        # Sort by total size
+        file_types.sort(key=lambda x: x["total_size"], reverse=True)
+        
+        # Calculate size distribution by ranges
+        size_ranges = {
+            "0-1KB": 0,
+            "1KB-10KB": 0,
+            "10KB-100KB": 0,
+            "100KB-1MB": 0,
+            "1MB-10MB": 0,
+            "10MB-100MB": 0,
+            "100MB+": 0
+        }
+        
+        for file_info in file_list:
+            size = file_info["size"]
+            if size < 1024:
+                size_ranges["0-1KB"] += 1
+            elif size < 10 * 1024:
+                size_ranges["1KB-10KB"] += 1
+            elif size < 100 * 1024:
+                size_ranges["10KB-100KB"] += 1
+            elif size < 1024 * 1024:
+                size_ranges["100KB-1MB"] += 1
+            elif size < 10 * 1024 * 1024:
+                size_ranges["1MB-10MB"] += 1
+            elif size < 100 * 1024 * 1024:
+                size_ranges["10MB-100MB"] += 1
+            else:
+                size_ranges["100MB+"] += 1
+        
+        # Get top 10 largest files
+        largest_files = sorted(file_list, key=lambda x: x["size"], reverse=True)[:10]
+        
+        return {
+            "summary": {
+                "path": str(full_path).replace("/app/host_root", ""),
+                "total_files": total_files,
+                "total_directories": total_dirs,
+                "total_size": total_size,
+                "duplicate_files": sum(d["count"] - 1 for d in duplicates),
+                "wasted_space": duplicate_size,
+                "unique_file_types": len(file_type_counts)
+            },
+            "file_types": file_types,
+            "size_distribution": size_ranges,
+            "duplicates": duplicates,
+            "largest_files": largest_files,
+            "all_files": file_list
+        }
+    
+    except HTTPException:
+        raise
+    except Exception as e:
+        print(f"ERROR analyzing directory: {str(e)}")
+        import traceback
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=f"Error analyzing directory: {str(e)}")
+
 @app.get("/health")
 async def health_check():
     """Health check endpoint"""
